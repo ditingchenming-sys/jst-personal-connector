@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>聚水潭个人连接器</title>
+<style>
+:root{font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;color:#182b45;background:#087fff;font-synthesis:none}
+*{box-sizing:border-box}body{margin:0;min-width:280px;min-height:100vh;background:linear-gradient(145deg,#0785ff 0%,#087cfa 48%,#0068df 100%)}
+.site-header{max-width:1280px;margin:0 auto;padding:28px 40px;display:flex;align-items:center;gap:14px;color:white}
+.brand-symbol{width:42px;height:42px;display:grid;place-items:center;flex:none;border:1px solid #ffffff65;border-radius:12px;background:#ffffff16;font-size:26px;font-weight:600}
+.brand-name{display:block;font-size:21px;letter-spacing:1px;font-weight:600}.brand-subtitle{display:block;margin-top:4px;font-size:12px;color:#edf6ff}
+.product-badge{margin-left:auto;border-radius:4px;padding:6px 10px;background:#fff;color:#176bcb;font-size:12px;white-space:nowrap}
+main{max-width:1200px;margin:0 auto;padding:24px 32px 30px}.login-stage{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);align-items:center;gap:76px;min-height:660px}
+.welcome-panel{min-width:0;position:relative;color:white;padding:15px 0 35px}.eyebrow{margin:0 0 16px;font-size:13px;letter-spacing:4px;color:#e3f4ff}
+h1{margin:0;font-size:43px;line-height:1.45;font-weight:600;letter-spacing:1px}.welcome-description{margin:22px 0 0;font-size:16px;line-height:1.9;color:#f0f7ff}
+.decoration{position:relative;height:215px;margin-top:26px;max-width:440px;overflow:hidden}.decor-ring{position:absolute;width:220px;height:220px;border:1px solid #ffffff36;border-radius:50%;right:18px;top:10px;box-shadow:0 0 0 27px #ffffff08,0 0 0 55px #ffffff05}
+.decor-sheet{position:absolute;left:18px;top:33px;width:260px;height:158px;border:1px solid #ffffff69;border-radius:14px;background:linear-gradient(120deg,#ffffff30,#ffffff0b);box-shadow:0 18px 32px #004aae26;transform:rotate(-6deg);padding:23px}
+.decor-sheet:before{content:"";display:block;width:32px;height:32px;border-radius:9px;background:#ffffffb5;margin-bottom:18px}.decor-sheet span{display:block;height:6px;background:#ffffff6b;border-radius:4px;margin:10px 0;width:70%}.decor-sheet span:last-child{width:48%}
+.decor-tile{position:absolute;right:35px;top:118px;width:103px;height:74px;border:1px solid #ffffff80;border-radius:12px;background:#ffffff25;transform:rotate(7deg);display:flex;align-items:flex-end;gap:8px;padding:16px}.decor-tile span{width:13px;border-radius:3px 3px 0 0;background:#e5f5ffb8;height:20px}.decor-tile span:nth-child(2){height:36px}.decor-tile span:last-child{height:27px}
+.signin-column{min-width:0;width:100%;max-width:480px;justify-self:end}.card{background:#fff;border:1px solid #e2eaf4;border-radius:8px;padding:26px;margin:0}.login-card{padding:35px 38px 28px;border:0;box-shadow:0 18px 55px #0053ad29}
+.login-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.login-heading h2{font-size:22px;font-weight:500;margin:0;color:#172a43}.login-heading span{font-size:11px;color:#71849b;border:1px solid #e0eaf6;padding:4px 7px;border-radius:3px;white-space:nowrap}
+.login-caption{font-size:12px;color:#74849a;line-height:1.8;margin:15px 0 26px}h2{font-size:18px;margin:0 0 14px}p{line-height:1.7}.muted{color:#738297}
+.authorization-notice{padding:12px 14px;margin:0 0 20px;border:1px solid #f0d7a1;border-radius:4px;background:#fff8e9;color:#865c15;font-size:13px;line-height:1.8}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;min-width:0}button,input{font:inherit;border:1px solid #d5deeb;border-radius:4px;padding:10px 12px;max-width:100%}
+button{cursor:pointer;background:#006fe8;color:white;border-color:#006fe8;transition:background .15s,border-color .15s}button:hover:not(:disabled){background:#0064d4;border-color:#0064d4}button.secondary{background:white;color:#3972b5;border-color:#d5e0ef}button.secondary:hover:not(:disabled){background:#f1f7ff;border-color:#98bdee}button.danger{background:#fff;color:#b44545;border-color:#e8caca}button:disabled{opacity:.5;cursor:default}
+input{min-width:0;color:#18314c;background:#fff}input::placeholder{color:#9aa7b8;font-size:13px}input:focus{outline:none;border-color:#1684ff;box-shadow:0 0 0 2px #1684ff17}button:focus-visible,a:focus-visible{outline:3px solid #66b5ff;outline-offset:3px}
+label{display:flex;gap:8px;align-items:center}.field{display:flex;flex-direction:column;align-items:stretch;gap:10px;margin:0 0 23px;font-size:14px;color:#27384d}.field input{width:100%;height:42px;font-size:15px;padding:10px 12px}
+.check{display:flex;align-items:flex-start;gap:7px;margin:13px 0;font-size:12px;line-height:1.8;color:#65768d}.check>span{min-width:0;overflow-wrap:anywhere}.check input[type=checkbox]{width:14px;height:14px;flex:none;margin:4px 0 0;padding:0;accent-color:#087fff}.check-detail{font-size:11px;color:#8b98aa}.terms-option{margin:18px 0 15px;font-size:11px}a{color:#0878ee;text-decoration:none}a:hover{text-decoration:underline}
+#password-submit{width:100%;height:43px;margin:1px 0 0;font-size:15px;letter-spacing:1px}#code-form{margin-top:22px}#code-form .row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px}#code-form label{grid-column:1/-1;font-size:14px}#code{width:100%;height:42px}#send-code{font-size:12px;height:42px}#submit-code{grid-column:1/-1;width:100%}#code-account{font-size:13px;overflow-wrap:anywhere}#code-notice{font-size:12px}
+#login-progress{font-size:13px;line-height:1.85;overflow-wrap:anywhere;border-left:3px solid #258cff;background:#f2f7ff;padding:12px 14px;margin:20px 0 14px}#login-progress:empty{display:none}#cancel-login{font-size:12px;width:100%;margin-top:3px}
+.connection-card{margin-top:16px;padding:15px 18px;border:1px solid #ffffff42;background:#0052b01c;color:#f3f8ff;box-shadow:none}.connection-card .row{gap:14px}.connection-card strong{display:block;width:100%;font-size:12px;font-weight:400;color:#f0f7ff}.connection-card button,.connection-card button.secondary,.connection-card button.danger{padding:3px 0;border:0;background:transparent;color:white;font-size:12px}.connection-card button:hover:not(:disabled){background:transparent;border:0;text-decoration:underline}.connection-card button.danger{color:#fff0ef}#message{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.8;margin:10px 0 0;border-top:1px solid #ffffff26;padding-top:10px}
+.management-section{margin-top:42px;box-shadow:0 8px 28px #0053ad14}.management-section>p{font-size:13px;color:#667a93}.management-section .row input{flex:1;min-width:150px}.management-section button{font-size:13px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f9fd;border:1px solid #e8eef7;border-radius:6px;padding:16px;max-height:380px;overflow:auto;font-size:12px;line-height:1.8}.page-note{text-align:center;margin:22px 0 0;font-size:12px;color:#e1efff;overflow-wrap:anywhere}
+[hidden]{display:none!important}
+@media(max-width:900px){.login-stage{gap:34px;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}h1{font-size:34px}.login-card{padding:30px 26px}.site-header{padding:24px 28px}.welcome-description{font-size:14px}.decor-sheet{width:210px}.decor-tile{right:15px}}
+@media(max-width:680px){.site-header{padding:21px 20px;gap:10px;flex-wrap:wrap}.brand-symbol{width:35px;height:35px;border-radius:9px;font-size:23px}.brand-name{font-size:17px;letter-spacing:0}.brand-subtitle{font-size:10px}.product-badge{font-size:10px;padding:4px 6px}main{padding:7px 16px 24px}.login-stage{grid-template-columns:minmax(0,1fr);gap:20px;min-height:0;align-items:start}.welcome-panel{padding:0 4px}.welcome-panel h1,.eyebrow,.decoration{display:none}.welcome-description{font-size:12px;line-height:1.8;margin:0}.welcome-description br{display:none}.signin-column{max-width:none;justify-self:stretch}.login-card{padding:28px 24px 25px}.login-heading h2{font-size:21px}.login-caption{margin:13px 0 24px}.field{margin-bottom:22px}.check-detail{display:block}.connection-card{padding:14px 17px}.management-section{margin-top:28px;padding:22px 18px}.management-section .row input{width:100%;flex-basis:100%}.page-note{font-size:11px;line-height:1.8}}
+</style></head><body><main>
+<header class="site-header"><span class="brand-symbol" aria-hidden="true">J</span><div><span class="brand-name">聚水潭个人连接器</span><span class="brand-subtitle">个人账号 · 本机运行</span></div><span class="product-badge">自建连接器</span></header>
+<section class="login-stage" aria-label="账号连接">
+<div class="welcome-panel"><p class="eyebrow">本人账号 · 独立连接</p><h1>你的聚水潭账号，<br>独立连接。</h1><p class="welcome-description">每个 AI 调用端独立使用本人账号。<br>登录资料在本机加密保存，退出账号时清除。</p><div class="decoration" aria-hidden="true"><div class="decor-ring"></div><div class="decor-sheet"><span></span><span></span></div><div class="decor-tile"><span></span><span></span><span></span></div></div></div>
+<div class="signin-column">
+<section class="card login-card" id="login-area"><div class="login-heading"><h2>账号密码登录</h2><span>本人账号</span></div><p class="login-caption">优先复用有效登录；只有聚水潭要求时，才需短信验证。</p>
+<p id="authorization-notice" class="authorization-notice" role="alert" hidden>此管理页面没有有效授权，暂不能填写或操作。请通过连接器重新打开当前调用端的管理页面。</p>
+<form id="account-form" autocomplete="off">
+<label class="field" for="username"><span>登录账号</span><input id="username" name="username" type="text" aria-label="聚水潭账号" autocomplete="username" placeholder="邮箱地址 / 手机号码" maxlength="128" required></label>
+<label class="field" for="password"><span>登录密码</span><input id="password" name="password" type="password" aria-label="密码" autocomplete="off" placeholder="请输入登录密码" maxlength="1024" required></label>
+<label class="check remember-option"><input id="remember" type="checkbox"><span>记住密码 <span class="check-detail">加密保存在本机，退出账号时清除</span></span></label>
+<label class="check terms-option"><input id="terms" type="checkbox" required><span>我已阅读并同意聚水潭<a id="agreement" target="_blank" rel="noreferrer noopener">《用户协议》</a>和<a id="privacy" target="_blank" rel="noreferrer noopener">《隐私政策》</a></span></label>
+<button id="password-submit" type="submit" disabled>登录并连接</button></form>
+<form id="code-form" hidden autocomplete="off"><p id="code-account"></p><div class="row"><label for="code">短信验证码</label><input id="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required placeholder="填写手机收到的6位验证码"><button id="send-code" type="button">发送验证码</button><button id="submit-code" type="submit">验证并继续</button></div><p class="muted" id="code-notice"></p></form>
+<p id="login-progress" role="status"></p><button id="cancel-login" class="secondary" hidden>取消本次登录</button>
+</section>
+<section class="card login-card" id="connected-area" hidden><h2>连接授权完成</h2><p>可以关闭本页，回到 AI 或业务系统继续使用。</p><p class="muted">查询与页面探查在当前账号权限内进行。制单、修改等业务操作仍须具体确认。</p></section>
+<div class="card connection-card"><div class="row"><strong id="client"></strong><button id="refresh" class="secondary">检查连接</button><button id="login">连接账号</button><button id="logout" class="danger">退出本端账号</button></div><p id="message" role="status">正在检查连接……</p></div>
+</div></section>
+<p class="page-note">登录授权完成后可关闭本页，回到 AI 或业务系统继续使用。关闭页面不会退出账号。</p>
+</main><script>
+'use strict';
+const fragment=new URLSearchParams(location.hash.slice(1));
+// Only this history entry can recover its same-tab temporary grant. A naked /ui
+// navigation never searches storage for another entry or another client's grant.
+const grantPrefix='jst-management-grant:',grantReference=history.state?.managementGrant;
+const validReference=value=>typeof value==='string'&&/^[0-9a-f-]{36}$/.test(value);
+const navigationType=performance.getEntriesByType('navigation')[0]?.type;
+let token=null,profile=null;
+try{
+ if(fragment.has('token')||fragment.has('profile')){
+  if(validReference(grantReference))sessionStorage.removeItem(grantPrefix+grantReference);
+  const nextToken=fragment.get('token'),nextProfile=fragment.get('profile');
+  if(nextToken&&nextProfile){
+   const reference=crypto.randomUUID();
+   sessionStorage.setItem(grantPrefix+reference,JSON.stringify({token:nextToken,profile:nextProfile}));
+   history.replaceState({managementGrant:reference},'',location.pathname);
+   token=nextToken;profile=nextProfile;
+  }else history.replaceState(null,'',location.pathname);
+ }else if(validReference(grantReference)&&(navigationType==='reload'||navigationType==='back_forward')){
+  const saved=JSON.parse(sessionStorage.getItem(grantPrefix+grantReference));
+  if(saved&&typeof saved.token==='string'&&saved.token&&typeof saved.profile==='string'&&saved.profile){token=saved.token;profile=saved.profile;}
+  history.replaceState(token?{managementGrant:grantReference}:null,'',location.pathname);
+ }else history.replaceState(null,'',location.pathname);
+}catch{
+ token=null;profile=null;history.replaceState(null,'',location.pathname);
+}
+let authorized=Boolean(token&&profile);
+const byId=id=>document.getElementById(id);let loginTimer=null,pollBusy=false,loginEpoch=0,termsReady=false;
+byId('client').textContent='当前调用端：'+(profile||'未指定');
+if(!authorized){byId('authorization-notice').hidden=false;document.querySelectorAll('input,button').forEach(element=>{element.disabled=true;});}
+function message(text){byId('message').textContent=text;}
+function invalidateAuthorization(){
+ authorized=false;token=null;profile=null;loginEpoch++;stopPolling();
+ try{const reference=history.state?.managementGrant;if(validReference(reference))sessionStorage.removeItem(grantPrefix+reference);}catch{}
+ history.replaceState(null,'',location.pathname);
+ byId('client').textContent='当前调用端：未指定';byId('authorization-notice').hidden=false;
+ byId('login-area').hidden=false;byId('connected-area').hidden=true;byId('account-form').hidden=false;byId('code-form').hidden=true;byId('cancel-login').hidden=true;
+ byId('password').value='';byId('code').value='';
+ document.querySelectorAll('input,button').forEach(element=>{element.disabled=true;});
+}
+async function api(action,body={}){
+ if(!token||!profile)throw Error('此管理页面没有有效授权，请通过连接器重新打开。');
+ const response=await fetch('/manage/'+action,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({profile,...body}),credentials:'omit',redirect:'error'});
+ if(response.status===401){invalidateAuthorization();throw Error('此管理页面授权已失效，请通过连接器重新打开。');}
+ const result=await response.json();if(!authorized)throw Error('此管理页面授权已失效，请通过连接器重新打开。');if(!response.ok||result.ok===false)throw Error(result.error?.message||'组件调用失败');return result;
+}
+async function run(action){try{await action();}catch(error){message(error.message);}}
+const stateNames={disconnected:'未连接',login_pending:'正在登录',saved_unverified:'登录资料已保存，等待核验',connected:'已连接'};
+const activeLogin=new Set(['starting','logging_in','need_code','verifying','notice_pending']);
+function stopPolling(){if(loginTimer)clearInterval(loginTimer);loginTimer=null;}
+window.addEventListener('hashchange',()=>{
+ // A newly opened grant may reuse this tab without a document navigation.
+ // Stop old requests/UI immediately, then let the entry parser consume the new hash.
+ authorized=false;token=null;profile=null;loginEpoch++;stopPolling();
+ document.querySelectorAll('input,button').forEach(element=>{element.disabled=true;});
+ location.reload();
+});
+function showLogin(state){
+ if(!authorized)return;
+ const active=activeLogin.has(state.status),pending=state.status==='identity_pending'||state.status==='notice_pending',connected=state.status==='connected';
+ byId('login-area').hidden=connected;
+ byId('connected-area').hidden=!connected;
+ byId('account-form').hidden=active||pending||connected;
+ byId('code-form').hidden=state.status!=='need_code';
+ byId('cancel-login').hidden=!active&&!pending;
+ byId('login-progress').textContent=state.message||'';
+ byId('password-submit').disabled=!termsReady||active||pending;
+ byId('send-code').disabled=!state.can_send_code;
+ byId('submit-code').disabled=state.status!=='need_code'||!state.code_sent||state.code_retry_after_seconds>0;
+ byId('code-account').textContent=state.masked_account?'请查收账号 '+state.masked_account+' 绑定手机的短信。':'请查收本人账号绑定手机的短信。';
+ byId('code-notice').textContent=state.retry_after_seconds>0?'请 '+state.retry_after_seconds+' 秒后再发送。':'';
+ if(active){if(!loginTimer)loginTimer=setInterval(()=>run(pollLogin),2000);}else stopPolling();
+ if(connected)run(refreshConnection);
+}
+async function pollLogin(){if(pollBusy)return;pollBusy=true;const epoch=loginEpoch;try{const result=await api('login-status');if(epoch===loginEpoch)showLogin(result.login);}catch(error){if(epoch===loginEpoch){stopPolling();throw error;}}finally{pollBusy=false;}}
+async function refreshConnection(){const epoch=loginEpoch,result=await api('status');if(epoch!==loginEpoch||!authorized)return;const state=result.connection,display=state.identity_display;message((state.message||'')+'\n连接状态：'+(stateNames[state.status]||'状态待核对')+(display?.company_name&&display?.user_name?'\n公司：'+display.company_name+'；员工：'+display.user_name:state.identity?'\n公司编号：'+state.identity.company_id+'；员工编号：'+state.identity.user_id:''));byId('login').disabled=state.status==='connected';}
+async function refresh(){await refreshConnection();await pollLogin();}
+byId('refresh').onclick=()=>run(refresh);
+byId('login').onclick=()=>run(pollLogin);
+byId('account-form').onsubmit=event=>{event.preventDefault();run(async()=>{const epoch=++loginEpoch;byId('password-submit').disabled=true;const password=byId('password').value;byId('password').value='';try{const result=await api('login-password',{username:byId('username').value.trim(),password,remember:byId('remember').checked,terms_accepted:byId('terms').checked});if(epoch===loginEpoch)showLogin(result.login);}catch(error){if(epoch===loginEpoch)throw error;}finally{if(epoch===loginEpoch)byId('password-submit').disabled=!termsReady||byId('account-form').hidden;}});};
+byId('send-code').onclick=()=>run(async()=>{const epoch=++loginEpoch;byId('send-code').disabled=true;try{const result=await api('login-send-code');if(epoch===loginEpoch)showLogin(result.login);}catch(error){if(epoch===loginEpoch){await pollLogin();throw error;}}});
+byId('code-form').onsubmit=event=>{event.preventDefault();run(async()=>{const epoch=++loginEpoch,code=byId('code').value;byId('code').value='';byId('submit-code').disabled=true;try{const result=await api('login-submit-code',{code});if(epoch===loginEpoch)showLogin(result.login);}catch(error){if(epoch===loginEpoch){await pollLogin();throw error;}}});};
+byId('cancel-login').onclick=()=>run(async()=>{const epoch=++loginEpoch;const result=await api('login-cancel');if(epoch===loginEpoch)showLogin(result.login);});
+byId('logout').onclick=()=>run(async()=>{if(!confirm('退出当前调用端账号并清除其登录资料？'))return;const epoch=++loginEpoch;await api('logout');if(epoch!==loginEpoch)return;stopPolling();byId('password').value='';byId('code').value='';byId('username').value='';byId('remember').checked=false;await refresh();});
+if(authorized)run(async()=>{const result=await api('login-options');for(const [id,key]of [['agreement','agreement_url'],['privacy','privacy_url']]){const target=new URL(result.terms[key]);if(target.protocol!=='https:')throw Error('登录协议地址无效，请更新组件。');byId(id).href=target.href;}termsReady=true;await refresh();});
+else message('此管理页面没有有效授权，请通过连接器重新打开。');
+</script></body></html>

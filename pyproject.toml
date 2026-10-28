@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jst-personal-connector"
+version = "0.2.0"
+description = "聚水潭个人连接器：独立登录、MCP 接入与员工执行通道"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+  "mcp>=1.27,<2",
+  "fastapi>=0.136,<1",
+  "uvicorn>=0.44,<1",
+  "httpx>=0.28,<0.29",
+  "cryptography>=46,<47",
+  "playwright>=1.58,<2",
+  "filelock>=3.20,<4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9,<10", "pytest-asyncio>=1,<2", "build>=1.4,<2", "ruff>=0.14,<1"]
+
+[project.scripts]
+jst-connector = "jst_connector.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jst_connector"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/scripts", "/examples", "/docs", "/pyproject.toml", "/README.md", "/INSTALL.md", "/AI接入说明.md", "/requirements.lock.txt", "/uv.lock", "/LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 110
+

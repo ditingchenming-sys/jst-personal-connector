@@ -1,0 +1,36 @@
+# 本机配置与个人凭据
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+sessions/
+browser_data/
+profiles/
+*cookie*.json
+*storage_state*.json
+*.pem
+*.key
+*.pfx
+
+# 本地业务与执行产物
+data/
+runtime/
+logs/
+artifacts/
+*.db
+*.db-*
+*.sqlite*
+
+# 开发环境
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.omx/
+*.egg-info/
+node_modules/
+dist/
+build/
