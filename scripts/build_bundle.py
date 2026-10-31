@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 
 PROJECT_NAME = "jst-personal-connector"
 MANIFEST = "manifest.sha256.json"
-FILES = ('README.md', 'INSTALL.md', 'AI接入说明.md', 'LICENSE', 'pyproject.toml', 'uv.lock', 'requirements.lock.txt', 'docs/通用探索与接口复用.md', 'scripts/install.ps1', 'scripts/install.sh', 'scripts/build_bundle.py', 'examples/system_integration.py')
+FILES = ('README.md', 'INSTALL.md', 'AI接入说明.md', 'LICENSE', 'pyproject.toml', 'uv.lock', 'requirements.lock.txt', 'docs/通用探索与接口复用.md', 'docs/查询使用指引.md', 'scripts/install.ps1', 'scripts/install.sh', 'scripts/build_bundle.py', 'examples/system_integration.py')
 MODULES = {
     "__init__.py", "__main__.py", "agent.py", "bridge.py", "browser.py", "cli.py", "client.py", "login_flow.py", "identity_probe.py", "auth_receipt.py",
     "config.py", "erp.py", "errors.py", "identity.py", "discovery_browser.py", "interface_registry.py",
