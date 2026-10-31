@@ -16,7 +16,6 @@
 
 - 先用 `search_capabilities` 查目录与保存接口，区分已适配、待验证和未适配状态。
 - 明确支持的基础查询用 `query_erp`；检查 `complete/has_more/total` 和错误，不能把未适配或未完成分页当作空结果或全量结果。
-- 查询参数的语义、字段含义、白名单范围与排查路径见 [查询使用指引](docs/查询使用指引.md)。该文档说明商品标识层级、自定义字段位各家口径不同、库存字段需另行取数、接口白名单按完整 URL 匹配，以及部分页面回调协议已下线等情况，避免误判为空数据或登录问题。
 - 未预置功能按 [通用探索与接口复用](docs/通用探索与接口复用.md) 使用 `start_discovery → inspect_discovery → interact_discovery → propose_read_interface → validate_read_interface → call_saved_interface`。条件不清楚时在当前对话里询问本人。
 - 查询契约通过连接器校验后，在当前已授权连接的读取范围内试查，不要求本人返回登录页逐项批准。服务端身份、Cookie 和令牌由连接器提供，模型不能自报公司、员工或授权。
 - 当前版本全部真实业务写入关闭。不得借查询、任意 HTTP、脚本或点击绕过制单、修改、审核和付款限制。

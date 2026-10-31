@@ -7,8 +7,8 @@
       "sha256": "b98373f10990771d52fc8e8fa836d44f7b448203b5e38acfd434a13feba9c81f"
     },
     "AI接入说明.md": {
-      "size": 3513,
-      "sha256": "3196c5f5a64d07ae50b3d798f81f00b400be8e25c97b9cc6b97e747552d4b10f"
+      "size": 3122,
+      "sha256": "1349f565b38dd2d7795ae3a4cbfdc600d11b565d84e6a4c4d4c6ac7381daf6b8"
     },
     "Dockerfile.test": {
       "size": 614,
@@ -23,8 +23,8 @@
       "sha256": "8b3e133cfc7bbc0db0096914a39c38560c4763509191fc478ca268560c924953"
     },
     "README.md": {
-      "size": 3561,
-      "sha256": "7d574a6e900ca6593140bc2a7e5f6d596de75bc7b4b8ff292152daa56472687b"
+      "size": 3383,
+      "sha256": "bd146bad92504f2394e490cbf373af9fca5e2520863a6768d47ea69a292e40b1"
     },
     "docs/通用探索与接口复用.md": {
       "size": 2126,
@@ -43,8 +43,8 @@
       "sha256": "a98df281f027dc676c5298a2d6a93256ad1acfb8a3ba66f6bbf2270fb51d4107"
     },
     "scripts/build_bundle.py": {
-      "size": 10546,
-      "sha256": "efdc943f9f9652b8e474e8cc051b12b9bc2f24aa630de5bb7a9495025d347158"
+      "size": 10331,
+      "sha256": "34e7f61e1d175ba60712e7b7321f9b3eb579e861865e4f66d02a2af1c1443401"
     },
     "scripts/install.ps1": {
       "size": 4276,
@@ -237,10 +237,6 @@
     "uv.lock": {
       "size": 195488,
       "sha256": "291a814487bae71d925025503cd38a0a4307f6d12117a595f98694edf75ac2c7"
-    },
-    "docs/查询使用指引.md": {
-      "size": 6544,
-      "sha256": "e0ba7263989dfa95891f74148c30fa42a263923ab22031937bd4a2176006e6dd"
     }
   }
 }
