@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>确认聚水潭操作</title>
+<style>body{font:16px/1.6 system-ui,sans-serif;background:#f4f6f8;color:#172332;margin:0}main{max-width:850px;margin:40px auto;background:white;padding:28px;border-radius:16px}h1{font-size:24px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f7fa;padding:18px;border-radius:8px}button{font:inherit;padding:12px 22px;background:#176a57;color:white;border:0;border-radius:8px;cursor:pointer}button:disabled{opacity:.5}#message{min-height:26px}</style>
+<main><h1>核对此次操作</h1><p>请核对实际账号、操作对象、变更内容和校验结果。确认仅授权此预览；内容变化后需要重新确认。</p>
+<p id="message" role="status">正在读取预览…</p><pre id="summary"></pre><details><summary>查看完整预览</summary><pre id="preview"></pre></details><p><button id="approve" disabled>确认此预览</button></p></main>
+<script>
+let grant=new URLSearchParams(location.hash.slice(1)).get('grant')||'';
+if(grant){sessionStorage.setItem('operationGrant',grant);history.replaceState(null,'',location.pathname)}else{grant=sessionStorage.getItem('operationGrant')||''}
+const message=document.getElementById('message'),button=document.getElementById('approve');let preview;
+async function call(action,body={}){const r=await fetch('/confirmation/'+action,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+grant},body:JSON.stringify(body)});const v=await r.json();if(!r.ok||!v.ok)throw Error(v.error?.message||'读取确认失败');return v}
+function summarize(record){const p=record.payload||{},i=record.identity||{};return ['操作：'+(p.name||p.capability_id||'本次业务操作'),p.purpose||'','公司：'+i.company_id+'；员工：'+i.user_id,'操作对象：'+JSON.stringify(p.subject??p.object??'请查看完整预览'),'变更前：'+JSON.stringify(p.before??'详见完整预览'),'预期结果：'+JSON.stringify(p.expected??p.prepared??p),'校验说明：'+(record.checks?.notice||'请展开核对全部校验信息'),'确认有效至：'+new Date(record.expires_at*1000).toLocaleString()].filter(Boolean).join('\n\n')}
+async function load(){try{preview=(await call('status')).preview;document.getElementById('summary').textContent=summarize(preview);document.getElementById('preview').textContent=JSON.stringify(preview,null,2);message.textContent=preview.status==='ready'?'核对后点击确认；执行将在AI或业务系统继续。':'此预览已处理，请回到AI查询操作状态。';button.disabled=preview.status!=='ready'}catch(e){message.textContent=e.message}}
+button.addEventListener('click',async()=>{button.disabled=true;try{await call('approve',{digest:preview.digest});sessionStorage.removeItem('operationGrant');message.textContent='已确认此预览。可以关闭本页，回到AI或业务系统执行。'}catch(e){message.textContent=e.message}});load();
+</script></html>

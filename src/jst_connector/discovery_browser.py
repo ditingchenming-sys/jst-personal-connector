@@ -537,7 +537,14 @@ class DiscoveryBrowser:
             return copy.deepcopy(item)
 
     async def execute_read(self, profile, descriptor):
-        """Only the immutable, approved registry calls this; no transport tool exposes it."""
+        """只读注册器调用固定契约；不作为任意HTTP工具暴露。"""
+        return await self._execute_contract(profile, descriptor)
+
+    async def execute_write(self, profile, descriptor):
+        """仅由完成可信确认并占用账本的写入注册器调用。"""
+        return await self._execute_contract(profile, descriptor)
+
+    async def _execute_contract(self, profile, descriptor):
         descriptor = copy.deepcopy(descriptor)
         if not isinstance(descriptor, dict):
             raise _error(message="接口描述格式无效。")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import sys
@@ -20,13 +21,33 @@ def _client_argument(value):
         raise argparse.ArgumentTypeError(error.message) from None
 
 
-def _write_config(root: Path, client: str, kind: str) -> str:
+def _write_config(root: Path, client: str, kind: str, remote_url: str | None = None) -> str:
     args = ["-m", "jst_connector", "mcp", "--client", client, "--data-dir", str(root)]
+    if remote_url:
+        from .remote_client import public_origin
+        args.extend(["--remote-url", public_origin(remote_url)])
     if kind == "codex":
         # JSON quoted basic strings are also valid TOML basic strings.
         return "[mcp_servers.jushuitan]\ncommand = " + json.dumps(sys.executable, ensure_ascii=False) + "\nargs = " + json.dumps(args, ensure_ascii=False) + "\nstartup_timeout_sec = 30\ntool_timeout_sec = 120\n"
     return json.dumps({"mcpServers": {"jushuitan": {"type": "stdio", "command": sys.executable,
                                                      "args": args, "timeout": 120000}}}, ensure_ascii=False, indent=2) + "\n"
+
+
+def _store_employee_credential(destination: Path, issue):
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            def sink(value):
+                stream.write(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            # EmployeeStore runs sink inside its transaction. File failure rolls back
+            # account creation/rotation; a failed commit removes the unusable new file.
+            return issue(sink)
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        raise
 
 
 def main(argv=None):
@@ -36,19 +57,67 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="聚水潭个人连接器")
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("init", "serve", "mcp", "open", "status", "catalog", "config", "doctor"):
+    for command in ("init", "serve", "mcp", "open", "status", "catalog", "config", "doctor",
+                    "serve-remote", "employee-add", "employee-token", "employee-disable"):
         part = sub.add_parser(command)
         part.add_argument("--data-dir", type=Path)
         if command in ("init", "mcp", "open", "status", "catalog", "config"):
             part.add_argument("--client", default="codex", type=_client_argument)
         if command == "serve":
             part.add_argument("--port", type=int, default=0)
+        if command == "serve-remote":
+            part.add_argument("--public-url", required=True, help="HTTPS 反向代理对外域名，如 https://jst.example.com")
+            part.add_argument("--port", type=int, default=8765)
+        if command in ("employee-add", "employee-token", "employee-disable"):
+            part.add_argument("--username", required=True)
+        if command in ("employee-add", "employee-token"):
+            part.add_argument("--client", default="workbench", type=_client_argument)
+            part.add_argument("--token-output", required=True, type=Path, help="员工调用凭证文件；须安全保管，不放入源码或安装包")
+        if command == "employee-add":
+            part.add_argument("--password-file", type=Path, help="可选：仅当前用户可读的员工密码文件；省略时隐藏输入")
+        if command in ("mcp", "open", "status", "catalog", "config"):
+            part.add_argument("--remote-url", help="远程组件 HTTPS 域名；访问凭证由 JST_CONNECTOR_ACCESS_TOKEN 提供")
         if command == "config":
             part.add_argument("--format", choices=("codex", "workbuddy", "generic"), required=True)
             part.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     root = data_directory(args.data_dir)
     try:
+        if args.command in ("employee-add", "employee-token", "employee-disable"):
+            from .remote import EmployeeStore
+            from .vault import Vault
+            store = EmployeeStore(root, Vault(root))
+            if args.command == "employee-disable":
+                store.disable(args.username)
+                print(json.dumps({"ok": True, "message": "员工账号已禁用，调用授权及页面会话已撤销。"}, ensure_ascii=False))
+                return
+            destination = args.token_output.expanduser().resolve()
+            if destination.exists():
+                raise FileExistsError
+            if destination.is_relative_to(Path(__file__).resolve().parents[2]):
+                raise ConnectorError("unsafe_secret_destination", "员工调用凭证须保存到源码或安装目录之外。")
+            if args.command == "employee-add":
+                if args.password_file:
+                    password_path = args.password_file.expanduser().resolve()
+                    if os.name != "nt" and password_path.stat().st_mode & 0o077:
+                        raise ConnectorError("unsafe_password_file", "员工密码文件须仅当前用户可读（chmod 600）。")
+                    password = password_path.read_text(encoding="utf-8").rstrip("\r\n")
+                else:
+                    password = getpass.getpass("新员工登录密码（至少12位）：")
+                    if password != getpass.getpass("再次输入员工登录密码："):
+                        raise ConnectorError("password_mismatch", "两次密码不一致，未创建员工。")
+                issued = _store_employee_credential(destination, lambda sink: store.create_employee(
+                    args.username, password, args.client, issue_sink=sink))
+            else:
+                issued = _store_employee_credential(destination, lambda sink: store.issue_token(
+                    args.username, args.client, issue_sink=sink))
+            print(json.dumps({"ok": True, "username": issued["username"], "client": issued["client"],
+                              "token_file": str(destination), "message": "员工调用凭证已写入指定文件，未在终端输出。"}, ensure_ascii=False))
+            return
+        if args.command == "serve-remote":
+            from .remote import serve_remote
+            serve_remote(root, origin=args.public_url, port=args.port)
+            return
         if args.command == "doctor":
             from cryptography.fernet import Fernet
             from playwright.sync_api import sync_playwright
@@ -85,7 +154,7 @@ def main(argv=None):
                 raise SystemExit(1)
             return
         if args.command == "config":
-            content = _write_config(root, args.client, args.format)
+            content = _write_config(root, args.client, args.format, args.remote_url)
             if args.output:
                 args.output.parent.mkdir(parents=True, exist_ok=True)
                 # 不覆盖用户已有配置，安装者按说明合并到对应客户端。
@@ -101,10 +170,16 @@ def main(argv=None):
             return
         if args.command == "mcp":
             from .mcp_server import create_server
-            create_server(root, args.client).run(transport="stdio")
+            from .remote_client import RemoteAgentClient
+            remote = RemoteAgentClient(args.remote_url) if args.remote_url else None
+            create_server(root, args.client, client=remote).run(transport="stdio")
             return
         from .client import AgentClient
-        client = AgentClient(root, args.client)
+        if getattr(args, "remote_url", None):
+            from .remote_client import RemoteAgentClient
+            client = RemoteAgentClient(args.remote_url)
+        else:
+            client = AgentClient(root, args.client)
         if args.command == "init":
             result = {"ok": True, "client": args.client, "data_dir": str(root),
                       "message": "已初始化独立调用端；尚未登录聚水潭。"}
@@ -117,5 +192,8 @@ def main(argv=None):
         raise SystemExit(1) from None
     except FileExistsError:
         print(json.dumps({"ok": False, "error": {"code": "file_exists", "message": "目标配置已存在，未覆盖。"}}, ensure_ascii=False), file=sys.stderr)
+        raise SystemExit(1) from None
+    except OSError:
+        print(json.dumps({"ok": False, "error": {"code": "local_file_error", "message": "本地文件无法读取或写入，请检查指定路径和访问权限。"}}, ensure_ascii=False), file=sys.stderr)
         raise SystemExit(1) from None
 

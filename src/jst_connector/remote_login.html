@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>聚水潭员工连接授权</title><style>
+:root{font-family:"Microsoft YaHei",system-ui,sans-serif;color:#18314c;background:#edf4fc}*{box-sizing:border-box}body{margin:0;padding:40px 20px}main{max-width:500px;margin:0 auto}h1{font-size:25px;margin:0 0 12px}h2{font-size:19px;margin:0 0 16px}.card{background:#fff;border:1px solid #dce5f0;border-radius:12px;padding:28px;margin:20px 0}p{line-height:1.8;color:#64768c;font-size:14px}label{display:block;font-size:14px;margin:16px 0 8px}input:not([type=checkbox]){width:100%;padding:12px;border:1px solid #c7d4e4;border-radius:5px;font:inherit}button{font:inherit;cursor:pointer;border:1px solid #087fff;border-radius:5px;padding:11px 14px;background:#087fff;color:white;margin-top:16px}button.secondary{background:#fff;color:#286cb5;border-color:#c9d6e5}button:disabled{opacity:.5;cursor:default}.check{display:flex;gap:8px;align-items:flex-start;font-size:12px;line-height:1.7}.check input{margin-top:4px}a{color:#0871da}#message{white-space:pre-wrap;overflow-wrap:anywhere;color:#254e77;background:#e5f0ff;border-radius:5px;padding:14px}input:focus,button:focus-visible{outline:2px solid #55a3ff;outline-offset:2px}[hidden]{display:none!important}#code{max-width:200px}.row{display:flex;gap:8px;flex-wrap:wrap}.row button{font-size:13px}.caption{font-size:12px}.full{width:100%}
+</style></head><body><main>
+<h1>聚水潭连接授权</h1><p>使用本人账号独立连接。完成授权即可关闭本页，回到 AI 或业务系统继续操作。</p>
+<section class="card" id="employee-card"><h2>登录员工账号</h2><p class="caption">请使用管理员为本人创建的连接器员工账号。此账号与聚水潭账号分别验证。</p>
+<form id="employee-form"><label for="employee">员工账号</label><input id="employee" autocomplete="username" maxlength="128" required><label for="employee-password">员工密码</label><input id="employee-password" type="password" autocomplete="current-password" maxlength="1024" required><button type="submit" class="full">登录员工账号</button></form></section>
+<section class="card" id="jst-card" hidden><h2 id="connection-title">连接本人的聚水潭</h2><p id="employee-display" class="caption"></p>
+<form id="jst-form"><label for="username">聚水潭账号</label><input id="username" autocomplete="username" maxlength="128" required><label for="password">聚水潭密码</label><input id="password" type="password" autocomplete="off" maxlength="1024" required>
+<label class="check"><input id="remember" type="checkbox"><span>记住密码（加密保存在服务器，仅本员工本调用端使用，退出聚水潭账号时清除）</span></label>
+<label class="check"><input id="terms" type="checkbox" required><span>我已阅读并同意聚水潭<a id="agreement" target="_blank" rel="noreferrer noopener">《用户协议》</a>和<a id="privacy" target="_blank" rel="noreferrer noopener">《隐私政策》</a></span></label><button id="jst-submit" type="submit" class="full" disabled>登录并连接</button></form>
+<form id="code-form" hidden><label for="code">本人手机收到的6位短信验证码</label><input id="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required><div class="row"><button id="send-code" type="button">发送验证码</button><button id="submit-code" type="submit">验证并继续</button></div></form>
+<p id="progress" role="status"></p><button id="cancel" type="button" class="secondary" hidden>取消本次登录</button>
+<div id="complete" hidden><h2>连接授权完成</h2><p>可以关闭本页，回到 AI 或业务系统继续使用。关闭页面不会退出聚水潭账号。</p></div>
+<div class="row"><button id="refresh" class="secondary">检查连接</button><button id="jst-logout" class="secondary">退出聚水潭账号</button><button id="employee-logout" class="secondary">退出此页面</button></div></section>
+<p id="message" role="status">正在检查员工登录……</p><p class="caption">聚水潭的扫码、短信及其他本人验证要求以原系统为准。请勿在 AI 对话中提供密码或 Cookie。</p>
+</main><script>
+'use strict';
+const $=id=>document.getElementById(id),params=new URLSearchParams(location.search);
+let csrf='',session=null,timer=null,pollBusy=false,epoch=0,termsReady=false;
+const requestedConnection=params.get('connection');
+function message(value){$('message').textContent=value;}
+function stop(){if(timer)clearInterval(timer);timer=null;}
+function signedOut(){epoch++;stop();csrf='';session=null;$('employee-card').hidden=false;$('jst-card').hidden=true;$('password').value='';$('code').value='';}
+async function request(path,body,method='POST'){
+ const response=await fetch(path,{method,credentials:'same-origin',redirect:'error',headers:{'Content-Type':'application/json',...(csrf?{'X-CSRF-Token':csrf}:{})},...(method==='GET'?{}:{body:JSON.stringify(body||{})})});
+ const result=await response.json();if(response.status===401){signedOut();}
+ if(!response.ok||result.ok===false)throw Error(result.error?.message||'连接请求失败，请检查网络。');return result;
+}
+const api=(action,body)=>request('/portal/connection/'+action,body);
+async function run(action){try{await action();}catch(error){message(error.message);}}
+function nextPath(){const value=params.get('next');return value&&/^\/operations\/[A-Za-z0-9_-]{16,80}(?:\?connection=[A-Za-z0-9_-]+)?$/.test(value)?value:null;}
+function showLogin(state){
+ const active=['starting','logging_in','need_code','verifying','identity_pending','notice_pending'].includes(state.status),connected=state.status==='connected';
+ $('jst-form').hidden=active||connected;$('code-form').hidden=state.status!=='need_code';$('complete').hidden=!connected;$('cancel').hidden=!active;
+ $('progress').textContent=state.message||'';$('send-code').disabled=!state.can_send_code;$('submit-code').disabled=state.status!=='need_code'||!state.code_sent||state.code_retry_after_seconds>0;
+ $('jst-submit').disabled=!termsReady||active;$('jst-logout').disabled=!connected;
+ if(active&&!timer)timer=setInterval(()=>run(poll),2000);if(!active)stop();
+ if(connected)run(status);
+}
+async function poll(){if(pollBusy)return;pollBusy=true;const current=epoch;try{const result=await api('login-status');if(current===epoch)showLogin(result.login);}finally{pollBusy=false;}}
+async function status(){const current=epoch,result=await api('status');if(current!==epoch)return;const value=result.connection,identity=value.identity_display;message((value.message||'')+'\n连接状态：'+(value.status==='connected'?'已连接':value.status==='disconnected'?'未连接':'待核验')+(identity?.company_name?'\n公司：'+identity.company_name+'；员工：'+identity.user_name:''));}
+async function ready(value){
+ if(requestedConnection&&value.connection_id&&requestedConnection!==value.connection_id){signedOut();message('此页面对应另一个调用端，请重新登录本人的员工账号。');return;}
+ session=value;csrf=value.csrf;$('employee-card').hidden=true;$('jst-card').hidden=false;$('employee-display').textContent='员工：'+value.username+'；调用端：'+value.client;
+ const target=nextPath();if(target){location.replace(target);return;}
+ const terms=await api('login-options');for(const[id,key]of[['agreement','agreement_url'],['privacy','privacy_url']]){const url=new URL(terms.terms[key]);if(url.protocol!=='https:')throw Error('协议地址无效，请更新连接器。');$(id).href=url.href;}
+ termsReady=true;await status();await poll();
+}
+$('employee-form').onsubmit=event=>{event.preventDefault();run(async()=>{const button=event.submitter;button.disabled=true;const password=$('employee-password').value;$('employee-password').value='';try{const value=await request('/portal/login',{username:$('employee').value.trim(),password,...(requestedConnection?{connection_id:requestedConnection}:{})});await ready(value);}finally{button.disabled=false;}});};
+$('jst-form').onsubmit=event=>{event.preventDefault();run(async()=>{const current=++epoch,password=$('password').value;$('password').value='';$('jst-submit').disabled=true;try{const result=await api('login-password',{username:$('username').value.trim(),password,remember:$('remember').checked,terms_accepted:$('terms').checked});if(current===epoch)showLogin(result.login);}finally{if(current===epoch)$('jst-submit').disabled=!termsReady||$('jst-form').hidden;}});};
+$('send-code').onclick=()=>run(async()=>{$('send-code').disabled=true;try{showLogin((await api('login-send-code')).login);}catch(error){await poll();throw error;}});
+$('code-form').onsubmit=event=>{event.preventDefault();run(async()=>{const code=$('code').value;$('code').value='';$('submit-code').disabled=true;try{showLogin((await api('login-submit-code',{code})).login);}catch(error){await poll();throw error;}});};
+$('cancel').onclick=()=>run(async()=>{epoch++;showLogin((await api('login-cancel')).login);});
+$('refresh').onclick=()=>run(async()=>{await status();await poll();});
+$('jst-logout').onclick=()=>run(async()=>{if(!confirm('退出本员工本调用端的聚水潭账号并清除其登录资料？'))return;epoch++;stop();await api('logout');$('username').value='';$('remember').checked=false;await status();await poll();});
+$('employee-logout').onclick=()=>run(async()=>{await request('/portal/logout');signedOut();message('已退出此页面；聚水潭连接仍保留。');});
+run(async()=>{try{await ready(await request('/portal/session',null,'GET'));}catch(error){signedOut();message(error.message);}});
+window.addEventListener('pagehide',stop);
+</script></body></html>

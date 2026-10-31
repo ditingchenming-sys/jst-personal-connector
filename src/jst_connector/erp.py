@@ -119,8 +119,8 @@ class ErpClient:
                  "identity_requirement": "生产组件使用固定服务器当前用户接口核实公司及员工；每次业务调用必须通过核验",
                  "adapted_scope": scopes.get(key, "已确认收录，当前尚未适配"),
                  "parameters": PARAMETERS.get(key, {})} for key, name in QUERY_NAMES.items()] + [
-            {"id": key, "name": name, "kind": "write", "status": "blocked_atomicity_unverified",
-             "verification": "整批原子提交边界未验证，未开放预览执行", "parameters": {}}
+            {"id": key, "name": name, "kind": "write", "status": "shortcut_unadapted_use_discovery",
+             "verification": "此预置快捷方式尚未适配；可从实际页面发现写请求并使用通用写入契约预览、确认与执行。", "parameters": {}}
             for key, name in WRITE_NAMES.items()]
 
     async def query(self, profile, capability_id, parameters):
@@ -147,7 +147,7 @@ class ErpClient:
     async def preview(self, profile, capability_id, parameters):
         if capability_id not in WRITE_NAMES:
             _fail("未找到该写入能力。", "UNKNOWN_CAPABILITY")
-        _fail("该能力尚未核实真实ERP试算及整批原子提交边界，不能生成可执行预览。", "ATOMICITY_UNVERIFIED")
+        _fail("此预置快捷方式尚未适配，请从实际页面发现请求并使用通用写入契约预览；不是业务类型限制。", "WRITE_SHORTCUT_UNADAPTED")
 
     async def _request_json(self, profile, url, payload):
         response = await self.browser.request(profile, "POST", url, payload)

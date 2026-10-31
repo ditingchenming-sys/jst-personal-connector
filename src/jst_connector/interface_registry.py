@@ -530,12 +530,20 @@ class InterfaceRegistry:
             result = await self.discovery.execute_read(profile, descriptor)
             self._assert_current(record)
             try:
-                if not isinstance(result, dict) or result.get("status") != 200 or "json" not in result.get("content_type", "").lower():
+                if (not isinstance(result, dict) or result.get("status") != 200
+                        or not any(kind in result.get("content_type", "").lower() for kind in ("json", "text/plain"))):
                     _fail("接口未返回约定的JSON成功响应。", "INTERFACE_RESPONSE_INVALID")
                 raw = result.get("text")
                 if not isinstance(raw, str) or len(raw) > 2_000_000:
                     _fail("接口响应过大或格式无效，请收窄范围。", "INTERFACE_RESPONSE_INVALID")
-                value = json.loads(raw)
+                if re.match(r"^\d{1,5}\|", raw):
+                    from .erp import _callback
+                    value = _callback(raw)
+                else:
+                    value = json.loads(raw)
+                    if isinstance(value, dict) and "IsSuccess" in value and "ReturnValue" in value:
+                        from .erp import _callback
+                        value = _callback(raw)
                 for assertion in record["response_rules"]["success"]:
                     actual = _at(value, assertion["path"])
                     if type(actual) is not type(assertion["equals"]) or actual != assertion["equals"]:

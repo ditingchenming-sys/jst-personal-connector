@@ -373,7 +373,7 @@ async def test_unsupported_filters_and_unadapted_capabilities_never_issue_reques
         assert error.value.code == code
     with pytest.raises(ConnectorError) as error:
         await client.preview("codex", "W01", {"atomicity": "proven"})
-    assert error.value.code == "ATOMICITY_UNVERIFIED" and not browser.calls
+    assert error.value.code == "WRITE_SHORTCUT_UNADAPTED" and not browser.calls
 
 
 def test_catalog_distinguishes_included_adapted_and_blocked():
@@ -381,7 +381,7 @@ def test_catalog_distinguishes_included_adapted_and_blocked():
     assert len(catalog) == 21
     assert catalog["Q01"]["status"] == "included_unadapted"
     assert catalog["Q02"]["status"] == "adapted_pending_live_validation"
-    assert catalog["W01"]["status"] == "blocked_atomicity_unverified"
+    assert catalog["W01"]["status"] == "shortcut_unadapted_use_discovery"
 
 
 class OfflineRoute:

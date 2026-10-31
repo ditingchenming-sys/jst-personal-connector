@@ -22,6 +22,7 @@ class ConnectorService:
         self.ledger = Ledger(self.root, self.vault)
         self._discovery = None
         self._interfaces = None
+        self._writes = None
 
     def _generic(self):
         if self._interfaces is None:
@@ -30,6 +31,22 @@ class ConnectorService:
             self._discovery = DiscoveryBrowser(self.browser)
             self._interfaces = InterfaceRegistry(self.root, self.vault, self.browser, self._discovery)
         return self._discovery, self._interfaces
+
+    def _write_registry(self):
+        if self._writes is None:
+            from .write_registry import WriteRegistry
+            discovery, interfaces = self._generic()
+            self._writes = WriteRegistry(self.root, self.vault, self.browser, discovery, interfaces, self.ledger)
+        return self._writes
+
+    async def propose_write_interface(self, profile, body):
+        return {"ok": True, "interface": await self._write_registry().propose(profile, body)}
+
+    async def preview_write_interface(self, profile, interface_id, parameters=None):
+        record = await self._write_registry().prepare(profile, interface_id, {} if parameters is None else parameters)
+        return {"ok": True, "preview": record, "executable": record["status"] in {"ready", "approved"},
+                "notice": "请本人或可信系统确认同一预览后执行。" if record["status"] in {"ready", "approved"}
+                else "已存在同内容任务，仅返回原记录，不能重复提交。"}
 
     async def start_discovery(self, profile, url="", purpose="查看当前账号可访问的聚水潭页面"):
         from .adapters.login import ENTRY_URL
@@ -70,7 +87,8 @@ class ConnectorService:
     async def list_interfaces(self, profile, query=""):
         await self.browser.identity(profile)
         _, interfaces = self._generic()
-        return {"ok": True, "interfaces": interfaces.list(profile, query)}
+        return {"ok": True, "interfaces": interfaces.list(profile, query),
+                "write_interfaces": self._write_registry().list(profile, query)}
 
     def authenticate(self, token: str) -> str:
         profile = self.vault.client_for_token(token)
@@ -91,12 +109,13 @@ class ConnectorService:
             words = query.casefold().split()
             catalog = [item for item in catalog if all(
                 word in str(item).casefold() for word in words)]
-        saved = []
+        saved, saved_writes = [], []
         if profile and self.vault.load_session(profile):
             _, interfaces = self._generic()
             saved = interfaces.list(profile, query)
-        return {"ok": True, "capabilities": catalog, "saved_interfaces": saved,
-                "notice": "预置接口是快捷入口；未收录功能可用start_discovery按需探查、核对、试查及保存复用。写入保证未验证的能力不开放执行。"}
+            saved_writes = self._write_registry().list(profile, query)
+        return {"ok": True, "capabilities": catalog, "saved_interfaces": saved, "saved_writes": saved_writes,
+                "notice": "预置接口仅为快捷入口；本人账号权限内的查询与操作均可按需探索、形成契约并复用。写入须真实预览、可信确认与结果回查，跨对象多步骤整批保证须单独核实。"}
 
     async def query(self, profile: str, capability_id: str, parameters: dict) -> dict:
         return {"ok": True, "client": profile, "capability_id": capability_id,
@@ -127,13 +146,28 @@ class ConnectorService:
         actor = {"source": "local_management", **session["identity"]}
         return {"ok": True, "preview": self.ledger.approve(profile, preview_id, digest, actor)}
 
+    async def reconcile_operation(self, profile: str, preview_id: str) -> dict:
+        current = self.ledger.get_preview(profile, preview_id)
+        if current["status"] != "unknown":
+            return {"ok": current["status"] == "succeeded", "preview": current,
+                    "notice": "仅结果未知的原操作可回查更新；执行中的请求不会被并发改写。"}
+        if current["payload"].get("kind") != "saved_write":
+            raise ConnectorError("recheck_adapter_pending", "该历史操作尚未提供只读结果核对适配，未重新执行。")
+        result = await self._write_registry().reconcile(profile, current["payload"])
+        record = self.ledger.reconcile_unknown(profile, preview_id, current["digest"], result)
+        return {"ok": record["status"] == "succeeded", "preview": record, "notice": result["notice"]}
+
     async def execute(self, profile: str, preview_id: str, digest: str) -> dict:
         current = self.ledger.get_preview(profile, preview_id)
+        if current["status"] == "superseded":
+            raise ConnectorError("preview_stale", "业务数据已变化，旧预览和确认已失效，请使用重新生成的预览。")
         if current["status"] in ("succeeded", "failed", "unknown", "executing"):
             return {"ok": current["status"] == "succeeded", "preview": current, "replayed": False,
                     "notice": "任务已执行或已占用，仅返回原记录，不重新提交。"}
-        executor = getattr(self.erp, "execute", None)
-        revalidate = getattr(self.erp, "revalidate", None)
+        generic = current["payload"].get("kind") == "saved_write"
+        adapter = self._write_registry() if generic else self.erp
+        executor = getattr(adapter, "execute", None)
+        revalidate = getattr(adapter, "revalidate", None)
         if executor is None or revalidate is None:
             raise ConnectorError("write_adapter_pending", "当前没有已验证整批提交保证的执行适配器，未发出业务写请求。")
         session = self.vault.load_session(profile)
@@ -143,7 +177,14 @@ class ConnectorService:
             raise ConnectorError("confirmation_required", "请本人或可信系统先确认同一预览。")
         if not await revalidate(profile, current["payload"]):
             raise ConnectorError("preview_stale", "原系统数据或业务状态已变化，请重新预览并确认；未执行。")
-        claimed = self.ledger.claim(profile, preview_id, digest, session["identity"])
+        try:
+            claimed = self.ledger.claim(profile, preview_id, digest, session["identity"])
+        except ConnectorError as error:
+            if generic and error.code == "preview_not_approved":
+                latest = self.ledger.get_preview(profile, preview_id)
+                if latest["status"] in {"executing", "succeeded", "failed", "unknown"}:
+                    return {"ok": latest["status"] == "succeeded", "preview": latest, "replayed": False}
+            raise
         try:
             result = await executor(profile, claimed["payload"])
         except asyncio.CancelledError:

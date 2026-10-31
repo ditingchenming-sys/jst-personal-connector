@@ -25,7 +25,8 @@ create_server(Path("."), "codex", client=ControlledClient()).run(transport="stdi
         async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
             await session.initialize()
             tools = {tool.name: tool for tool in (await session.list_tools()).tools}
-            assert len(tools) == 15
+            assert len(tools) == 18
+            assert {"propose_write_interface", "preview_write_interface", "request_operation_confirmation"} <= set(tools)
             assert tools["propose_read_interface"].inputSchema["properties"]["read_evidence"]["type"] == "object"
             assert not any("approve" in name for name in tools)
             body = {"discovery_id": "fixture-discovery", "request_id": "fixture-request", "name": "fixture-query",

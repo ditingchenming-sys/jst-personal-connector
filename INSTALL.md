@@ -1,6 +1,6 @@
 # 安装与更新
 
-需要 Python 3.11+、网络访问和支持本地 MCP stdio 的 AI 客户端。当前版本 0.2.0，实际调用在本机运行；本仓库不提供公网 MCP 服务。
+需要 Python 3.11+、网络访问和支持 MCP stdio 的 AI 客户端。当前版本 0.3.0，可选本机组件或自己部署的 Linux 多员工 HTTPS 服务。GitHub 只分发安装包，不代管任何账号或业务服务。
 
 ## 完整分发包
 
@@ -69,6 +69,74 @@ Windows 安装环境内：
 Linux 对应使用 `.venv/bin/python`。其他兼容客户端可用 `--format generic` 生成通用 JSON，并使用独立调用端名称，例如 `--client my-ai`。
 
 将生成内容合并到目标 AI 的 MCP 配置，不覆盖其他服务；刷新或重启客户端后检查工具列表。首次使用先调用 `connector_status`，需要登录时调用 `open_connection_manager`。每个 AI 分别登录自己的账号，每个调用端仅保留一个账号，换账号先退出。
+
+## Linux 多员工远程部署
+
+在服务器完成上述安装，使用独立运行目录和原密钥。下面的域名为示例，部署时换成自己的 HTTPS 域名；不把示例变成实际安装地址。
+
+```sh
+.venv/bin/python -m jst_connector serve-remote \
+  --data-dir /var/lib/jst-connector \
+  --public-url https://jst.example.com --port 8765
+```
+
+服务默认只监听服务器 `127.0.0.1:8765`，由 HTTPS 反向代理对外提供入口。单进程启动，勿对同一运行目录运行多个服务；安装脚本不自动注册系统服务。已有进程管理器可运行以上命令，主密钥通过秘密管理注入。
+
+Nginx 示例（证书由部署环境提供）：
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name jst.example.com;
+    ssl_certificate /etc/ssl/jst/fullchain.pem;
+    ssl_certificate_key /etc/ssl/jst/privkey.pem;
+    client_max_body_size 1m;
+    location / {
+        proxy_pass http://127.0.0.1:8765;
+        proxy_set_header Host jst.example.com;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_read_timeout 150s;
+    }
+}
+```
+
+`Host` 须匹配 `--public-url`，员工浏览器使用此 HTTPS 域名。应用检查固定域名和同源请求；浏览器凭证使用 Secure、HttpOnly、SameSite cookie。反向代理不要记录 Authorization、Cookie、请求体或登录参数。运行目录由部署账号独占读写。
+
+管理员在服务器本机创建员工账号，命令隐藏输入员工密码，调用凭证只写指定私有文件，不输出终端：
+
+```sh
+umask 077
+.venv/bin/python -m jst_connector employee-add \
+  --data-dir /var/lib/jst-connector --username alice --client workbuddy \
+  --token-output /var/lib/jst-credentials/alice-workbuddy.json
+```
+
+`--client` 用于区分每个 AI 或接入系统。另一调用端另发令牌、另存聚水潭会话：
+
+```sh
+.venv/bin/python -m jst_connector employee-token \
+  --data-dir /var/lib/jst-connector --username alice --client codex \
+  --token-output /var/lib/jst-credentials/alice-codex.json
+```
+
+对已有同名调用端再次发令牌会撤销旧令牌和员工浏览器会话；凭证文件不覆盖，轮换时使用新文件名。禁用员工使用 `employee-disable --data-dir /var/lib/jst-connector --username alice`。员工账号只授权连接器访问；实际公司及聚水潭员工身份仍须本人登录后核验。
+
+将每人每调用端对应文件中的 `access_token` 通过各自客户端的秘密环境配置注入 `JST_CONNECTOR_ACCESS_TOKEN`，不要把完整凭证交给 AI 对话、放进仓库或 URL。服务端 `JST_CONNECTOR_MASTER_KEY` 不交给员工电脑。客户端生成远程适配配置：
+
+```sh
+python -m jst_connector config --client workbuddy --format workbuddy \
+  --remote-url https://jst.example.com --output workbuddy-remote.json
+```
+
+此配置运行 `mcp --remote-url` 的 stdio 适配器，继承员工自己的 `JST_CONNECTOR_ACCESS_TOKEN` 环境变量。配置中不包含令牌，AI客户端启动时须确实继承该秘密环境；不同员工或AI勿共用同一环境凭证。
+
+首次 `open_connection_manager` 返回普通远程登录网址。员工用自己电脑浏览器打开，登录管理员创建的员工账号，再连接本人聚水潭账号并按需完成短信；连接完成可关页。有效登录态加密保存在服务器，按员工和调用端隔离，已有本机模式不会改为共享会话。
+
+写入使用通用契约和真实预览。`request_operation_confirmation` 返回独立业务确认网址，需要本人员工浏览器会话；登录页不显示业务预览。确认后由 AI 或可信系统执行同一预览，执行结果回查并记录。只有MCP调用令牌不能自行批准。
+
+工作台可通过每员工各自令牌调用同一 `/api/{action}`；不能用共享令牌加请求参数 `profile/employee_id` 代替身份映射。具体工作台还须接好账号分配、秘密保存和可信确认；本仓库发布不等于已改动某个外部工作台。
+
+后端参考：[FastAPI 身份认证](https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/)、[Playwright 请求观察](https://playwright.dev/python/docs/network)。本实现使用服务端存储的随机会话及盐化密码摘要，接口调用与浏览器确认的权限分别校验。
 
 ## 登录资料与更新
 

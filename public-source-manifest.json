@@ -7,28 +7,28 @@
       "sha256": "b98373f10990771d52fc8e8fa836d44f7b448203b5e38acfd434a13feba9c81f"
     },
     "AI接入说明.md": {
-      "size": 3122,
-      "sha256": "1349f565b38dd2d7795ae3a4cbfdc600d11b565d84e6a4c4d4c6ac7381daf6b8"
+      "size": 4360,
+      "sha256": "2b2a4d6d421c387c7d0a5ab7c262d9db148193e0f68326acb19cbb4cb03c9df7"
     },
     "Dockerfile.test": {
       "size": 614,
       "sha256": "63570df9492891c342c1264acb12d04db2bc3340a6d81485f115a2f0c3faf14c"
     },
     "INSTALL.md": {
-      "size": 4683,
-      "sha256": "0381b9244c18fd338e99f833747af5076afada172d06e53206d6bad6f00e8f47"
+      "size": 9041,
+      "sha256": "8f8353d7e23523e0ed2123d79ee8419c8d44edd45e19adb7f8e422f689a97a62"
     },
     "LICENSE": {
       "size": 1096,
       "sha256": "8b3e133cfc7bbc0db0096914a39c38560c4763509191fc478ca268560c924953"
     },
     "README.md": {
-      "size": 3383,
-      "sha256": "bd146bad92504f2394e490cbf373af9fca5e2520863a6768d47ea69a292e40b1"
+      "size": 4334,
+      "sha256": "c897da87b2a153faed711e2ada6ab62e1fbcdbdd57fe76c4866287b1770c87a5"
     },
     "docs/通用探索与接口复用.md": {
-      "size": 2126,
-      "sha256": "c4d1f1ee6f04f08a0916e58b9b74d317ffdb02531e558228373afe18b7293c0f"
+      "size": 4716,
+      "sha256": "acb7655389adbdf6f7cdc4e322e05049c84af179210ad437a193e5092b3d99dc"
     },
     "examples/system_integration.py": {
       "size": 2329,
@@ -36,15 +36,15 @@
     },
     "pyproject.toml": {
       "size": 1113,
-      "sha256": "7dd9d938da3a53d176ab9deaa6f7324009c9e512f81003000538ed0688012659"
+      "sha256": "3d49b47373ca20ef554e39ece2725b2766195e8a5bfd67faea00e7389256a800"
     },
     "requirements.lock.txt": {
       "size": 48658,
       "sha256": "a98df281f027dc676c5298a2d6a93256ad1acfb8a3ba66f6bbf2270fb51d4107"
     },
     "scripts/build_bundle.py": {
-      "size": 10331,
-      "sha256": "34e7f61e1d175ba60712e7b7321f9b3eb579e861865e4f66d02a2af1c1443401"
+      "size": 10478,
+      "sha256": "1a793ac80f2a1e22297f214eecf4bf138d4a25b235d5ed5fec3502186209b556"
     },
     "scripts/install.ps1": {
       "size": 4276,
@@ -56,7 +56,7 @@
     },
     "src/jst_connector/__init__.py": {
       "size": 58,
-      "sha256": "5bd48f4ebdc7d456d7603f70dfcd93849ebc723d88a571d581a64a5851547d33"
+      "sha256": "3c4acfb44c9a039320a63fb216f80f90b41ecb6149d9f45cd40672c687bce100"
     },
     "src/jst_connector/__main__.py": {
       "size": 30,
@@ -75,8 +75,8 @@
       "sha256": "49b871b4ec6a44063375765add699feda145662a1a4200fcdc592c1ec4e77c73"
     },
     "src/jst_connector/agent.py": {
-      "size": 10037,
-      "sha256": "af203171801dfb310221c30735cd06a282856fa01e5cbd0b27e2ff1f929031b3"
+      "size": 10846,
+      "sha256": "3ba8e5f2c7e90482c3da36f5be262ecc09450fb4aea704335c5c5c12e86c1814"
     },
     "src/jst_connector/auth_receipt.py": {
       "size": 5576,
@@ -91,8 +91,8 @@
       "sha256": "de4a1427db026850ed7a516726f6def5dc1fde99e68372a6298787db4ddfe1d1"
     },
     "src/jst_connector/cli.py": {
-      "size": 6476,
-      "sha256": "a0d542b0c083f2aa7d07c72a8ba394d3e114fd6d93ac527ec1f8105c0b3b5f82"
+      "size": 11630,
+      "sha256": "cab9b49c286ea953967068b949a47d3f2a32e4edfaa4475a4e53bca782460772"
     },
     "src/jst_connector/client.py": {
       "size": 3890,
@@ -103,12 +103,12 @@
       "sha256": "1311e93096b2857934edf8bbf3cc7ade5e9a3ddde7a44d171a4c6bf62e2bf31a"
     },
     "src/jst_connector/discovery_browser.py": {
-      "size": 37785,
-      "sha256": "372b7335268766d12cebbe2973ef5e25514849c5cdee41514b95fe55f6cd4113"
+      "size": 38112,
+      "sha256": "3905bb739512d788afbc0065543e3ac4767254a6bcbbe786be57cabd3f8631df"
     },
     "src/jst_connector/erp.py": {
-      "size": 25812,
-      "sha256": "bcdb7ed94bc8b3b00723ee935960d647ab2a2053c5b58cfb2c688e572e952f77"
+      "size": 25919,
+      "sha256": "8a4c5f356c48e38be41e62080517211f666076f89b99898ee5939f2ef22aacf5"
     },
     "src/jst_connector/errors.py": {
       "size": 424,
@@ -123,12 +123,16 @@
       "sha256": "87888789840d656c909c7587e10a8957672c810c1bc32f833074c49db399b9cf"
     },
     "src/jst_connector/interface_registry.py": {
-      "size": 32189,
-      "sha256": "569e779884f914db41ad5317157ee477f641d81c110d13f96e8f8009de1e1f47"
+      "size": 32616,
+      "sha256": "a96e10b2c6bf01b2b2f2c305d60c88896a889e199e7bdddc7f1ecffc91421dac"
     },
     "src/jst_connector/ledger.py": {
-      "size": 8691,
-      "sha256": "fac7133643abbd8206e6f1d072bfa2c25bbbfa241ba377c2821281fe76860fd3"
+      "size": 13855,
+      "sha256": "69bf4ed39e9167bf27809c0cc61df23ce0606ee21f2b3f89f18fbec5878f43b9"
+    },
+    "src/jst_connector/local_confirmation.py": {
+      "size": 3259,
+      "sha256": "0a0648a50356a4ae1022b6cfb3f30373320dd78d5430ad13d4c3acb479c3fdc5"
     },
     "src/jst_connector/login_flow.py": {
       "size": 26713,
@@ -139,12 +143,32 @@
       "sha256": "8211269c1239da4428dc193e18d8d7da3c43cbe3056d693f14fa41302b6ce833"
     },
     "src/jst_connector/mcp_server.py": {
-      "size": 8736,
-      "sha256": "5942d3ca7751e6748fc58d1cdc0bf2a6403d0a60b4100558865beecd7b37c472"
+      "size": 12079,
+      "sha256": "cf53047b3768af9e841a90077ae8a49cb613b8a5dfcd35e6d53b846f8ff363e4"
+    },
+    "src/jst_connector/operation_confirmation.html": {
+      "size": 3042,
+      "sha256": "04cb9e1e4f8827392eced3a7e3a6f6656921d1d32abb77c2254fcb3cc6d8f7e5"
+    },
+    "src/jst_connector/remote.py": {
+      "size": 21808,
+      "sha256": "0c98602e77896edc5b68e9d3a5734e74388d03266970e623922eb8f66548a663"
+    },
+    "src/jst_connector/remote_client.py": {
+      "size": 3164,
+      "sha256": "45757d60ae69fac75366daf3d7a223fa50861ab1f9471340c12ca0cdab179c22"
+    },
+    "src/jst_connector/remote_confirmation.html": {
+      "size": 3519,
+      "sha256": "6bbe68b0682be3e5fd1b2c4a8c073f4e94a0b3f996e8b83491016f6da3359e45"
+    },
+    "src/jst_connector/remote_login.html": {
+      "size": 9764,
+      "sha256": "ad4b9504b58aa937df7697a6800fe3bc97f5c8fde06a3fe82917c2701a31dfa7"
     },
     "src/jst_connector/service.py": {
-      "size": 9671,
-      "sha256": "06b1cf70aaae93f8b0526c9950ab7aa022ec4c1ef8dfec9a6212e79de539f15b"
+      "size": 12541,
+      "sha256": "238b2750351b8219c610094df14864cb6cdaa915d6353ea95c1bd52b97d3a316"
     },
     "src/jst_connector/system_runner.py": {
       "size": 15050,
@@ -157,6 +181,10 @@
     "src/jst_connector/vault.py": {
       "size": 9376,
       "sha256": "ce5f706e1f40cd2f75aa6bcd7630d04b4a6d6c64a582f3fa4dcdda6d833c2be4"
+    },
+    "src/jst_connector/write_registry.py": {
+      "size": 21086,
+      "sha256": "8d5adae9beac98c3c9e49e9eac3d0b71a3078b21919a248617fe8e2a9967c3ca"
     },
     "tests/test_auth_diagnostics.py": {
       "size": 5197,
@@ -171,8 +199,8 @@
       "sha256": "f74421e6354c1dd6907c485cda90ee699940618f49464fd2ffb872fcb501391c"
     },
     "tests/test_browser_erp.py": {
-      "size": 29345,
-      "sha256": "c102cc4d19b83fa3e1adafb3c234e6ef1aff0934dfdc28b37cf125276a258538"
+      "size": 29353,
+      "sha256": "75dd1759f7efa83b56d89baf38d21cb46ccd3fcd9a7dff9837f52241f2d9a5cb"
     },
     "tests/test_current_user_probe.py": {
       "size": 2892,
@@ -191,8 +219,16 @@
       "sha256": "818b4527221064913b9977868fee5997a9d1786731446c9ca7ea38b9babc68d8"
     },
     "tests/test_generic_mcp_contract.py": {
-      "size": 2337,
-      "sha256": "739629edad6225268a030a3ea7cf5b3167127c70049bf9a0cf1e9aaac5e36d1c"
+      "size": 2459,
+      "sha256": "5e95118fa37ad2a1376feef9fedf98cd6c03230c6c86263b2b3f0848f8d81f44"
+    },
+    "tests/test_generic_write.py": {
+      "size": 24801,
+      "sha256": "e2ba80c71bc0cd6782b494f390346b04bb63ec1a374063f126e2548887c998b4"
+    },
+    "tests/test_generic_write_transport.py": {
+      "size": 9914,
+      "sha256": "4d37ef960696553d1b0a651a6816b8581ae270ddcc782bba0344336fdc47a7e7"
     },
     "tests/test_identity.py": {
       "size": 11945,
@@ -203,8 +239,12 @@
       "sha256": "659e1c4b54340a73b58caa7cb25fc579ab5eba34b279c689e94bf442a46a7d00"
     },
     "tests/test_interface_registry.py": {
-      "size": 17570,
-      "sha256": "a1d4fb537ead9571c62e8cdd8080647b77f5df4c43301015c04bd06e636986f8"
+      "size": 18616,
+      "sha256": "fbee8ee21634980025faa6d0d4753b245a2dccb7c442f802e19898f9aeb3eead"
+    },
+    "tests/test_local_confirmation.py": {
+      "size": 4543,
+      "sha256": "54344208619e0dd5cdb09b40d9b314e92da71eb56b19ed5d7962fed5a16d5a0d"
     },
     "tests/test_login_flow.py": {
       "size": 27727,
@@ -222,6 +262,10 @@
       "size": 3511,
       "sha256": "36ecfb2bc3eb74cd24c5e131a02907e824c5af0bab447eaf9446d0289c6126b7"
     },
+    "tests/test_remote_auth.py": {
+      "size": 19452,
+      "sha256": "23e2e104a8ea114431981f33fd30214b94841df7e2564e9d7e9f9eec2872f54e"
+    },
     "tests/test_service_api.py": {
       "size": 10052,
       "sha256": "c0a773c69913c6b84908104868edb90055b8735f2ade668d9ce188577d33f4fa"
@@ -236,7 +280,7 @@
     },
     "uv.lock": {
       "size": 195488,
-      "sha256": "291a814487bae71d925025503cd38a0a4307f6d12117a595f98694edf75ac2c7"
+      "sha256": "66a366c77582d7d62108c8105aa090e2c204c48e6237cdd94d45e51fcc238d84"
     }
   }
 }

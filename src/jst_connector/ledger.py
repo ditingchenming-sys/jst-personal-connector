@@ -23,6 +23,8 @@ class Ledger:
             connection.execute("""CREATE TABLE IF NOT EXISTS previews (
                 preview_id TEXT PRIMARY KEY, profile TEXT NOT NULL,
                 status TEXT NOT NULL, encrypted TEXT NOT NULL)""")
+            connection.execute("""CREATE TABLE IF NOT EXISTS operation_keys (
+                operation_key TEXT PRIMARY KEY, profile TEXT NOT NULL, preview_id TEXT NOT NULL)""")
         self.path.chmod(0o600)
 
     @contextmanager
@@ -46,7 +48,10 @@ class Ledger:
     def _digest(record: dict) -> str:
         fields = ("preview_id", "profile", "identity", "payload", "checks", "atomicity",
                   "created_at", "expires_at", "session_binding")
-        return hashlib.sha256(_json({field: record[field] for field in fields})).hexdigest()
+        values = {field: record[field] for field in fields}
+        if "execution_boundary" in record:
+            values["execution_boundary"] = record["execution_boundary"]
+        return hashlib.sha256(_json(values)).hexdigest()
 
     def _read(self, connection, profile: str, preview_id: str) -> dict:
         row = connection.execute("SELECT * FROM previews WHERE preview_id=? AND profile=?",
@@ -85,19 +90,25 @@ class Ledger:
         current, binding = self._session(record["profile"], identity or record["identity"])
         if current != record["identity"] or binding != record["session_binding"]:
             raise ConnectorError("identity_changed", "登录状态已变更，请重新预览并确认。")
-        if record["atomicity"] != "verified":
+        if record["atomicity"] != "verified" and record.get("execution_boundary") != "single_object_request":
             raise ConnectorError("atomicity_unverified", "尚未核实整批原子提交保证，不能执行。")
 
     def _write(self, connection, record: dict) -> None:
         connection.execute("UPDATE previews SET status=?, encrypted=? WHERE preview_id=? AND profile=?",
                            (record["status"], self.vault.seal(record), record["preview_id"], record["profile"]))
 
-    def create_preview(self, profile, identity, payload, checks, atomicity="unverified", ttl=300) -> dict:
+    def create_preview(self, profile, identity, payload, checks, atomicity="unverified", ttl=300,
+                       *, execution_boundary=None, operation_key=None, verified_reissue=False) -> dict:
         profile = _profile(profile)
         if isinstance(ttl, bool) or not isinstance(ttl, (int, float)) or not 0 < ttl <= 86400:
             raise ConnectorError("invalid_ttl", "预览有效期必须大于零且不超过一天。")
         if atomicity not in ("unverified", "verified"):
             raise ConnectorError("invalid_atomicity", "原子性验证状态无效。")
+        if execution_boundary not in (None, "single_object_request"):
+            raise ConnectorError("invalid_boundary", "执行边界无效。")
+        if operation_key is not None and (not isinstance(operation_key, str) or len(operation_key) != 64
+                                           or any(char not in "0123456789abcdef" for char in operation_key)):
+            raise ConnectorError("invalid_operation_key", "业务防重复标识无效。")
         with self.vault._lock:
             current, binding = self._session(profile, identity)
             created = time.time()
@@ -105,11 +116,43 @@ class Ledger:
                       "payload": payload, "checks": checks, "atomicity": atomicity,
                       "created_at": created, "expires_at": created + ttl,
                       "session_binding": binding, "status": "ready", "approval": None, "result": None}
+            if execution_boundary is not None:
+                record["execution_boundary"] = execution_boundary
             record["digest"] = self._digest(record)
             encrypted = self.vault.seal(record)
             with self._connection(write=True) as connection:
+                if operation_key is not None:
+                    prior = connection.execute("SELECT profile, preview_id FROM operation_keys WHERE operation_key=?",
+                                               (operation_key,)).fetchone()
+                    if prior is not None:
+                        previous = self._read(connection, prior["profile"], prior["preview_id"])
+                        if previous["identity"]["company_id"] != current["company_id"]:
+                            raise ConnectorError("identity_changed", "原任务不属于当前公司或员工。")
+                        if (verified_reissue and previous["status"] in {"ready", "approved"}
+                                and isinstance(previous["payload"].get("before_digest"), str)
+                                and isinstance(payload.get("before_digest"), str)
+                                and previous["payload"]["before_digest"] != payload["before_digest"]):
+                            # The fresh ERP precheck invalidates an older preview
+                            # and its approval; no in-flight/unknown task is freed.
+                            previous.update(status="superseded", superseded_at=created)
+                            self._write(connection, previous)
+                        terminal_block = {"executing", "unknown"} | (set() if verified_reissue else {"succeeded"})
+                        active = (previous["status"] in terminal_block
+                                  or previous["expires_at"] > created and previous["status"] in {"ready", "approved"})
+                        if prior["profile"] != profile and active:
+                            code, message = ("operation_result_unknown", "同公司此操作已有结果未知的提交，须先核对，不能重复执行。") if previous["status"] == "unknown" else (
+                                ("operation_already_submitted", "同公司此操作已经提交，请核对业务系统结果，不能重复执行。") if previous["status"] == "succeeded" else
+                                ("operation_in_progress", "同公司此操作已由其他调用端处理，请等待或核对原任务。"))
+                            raise ConnectorError(code, message)
+                        if prior["profile"] == profile and (previous["status"] in terminal_block
+                                or previous["status"] in {"ready", "approved"} and previous["session_binding"] == binding
+                                and previous["expires_at"] > created):
+                            return self._public(previous)
                 connection.execute("INSERT INTO previews VALUES (?, ?, ?, ?)",
                                    (record["preview_id"], profile, "ready", encrypted))
+                if operation_key is not None:
+                    connection.execute("INSERT INTO operation_keys VALUES (?,?,?) ON CONFLICT(operation_key) DO UPDATE SET profile=excluded.profile, preview_id=excluded.preview_id",
+                                       (operation_key, profile, record["preview_id"]))
             return self._public(self.vault.unseal(encrypted))
 
     def get_preview(self, profile, preview_id) -> dict:
@@ -155,5 +198,22 @@ class Ledger:
             if record["status"] != "executing":
                 raise ConnectorError("execution_not_claimed", "预览未处于执行状态，不能覆盖执行结果。")
             record.update(status=status, result=result, finished_at=time.time())
+            self._write(connection, record)
+            return self._public(record)
+
+    def reconcile_unknown(self, profile, preview_id, digest, result) -> dict:
+        """Apply server-produced readback evidence without reopening submission."""
+        with self.vault._lock, self._connection(write=True) as connection:
+            record = self._read(connection, profile, preview_id)
+            self._session(profile, record["identity"])
+            if not isinstance(digest, str) or not secrets.compare_digest(record["digest"], digest):
+                raise ConnectorError("digest_mismatch", "回查对象与原预览不一致。")
+            if record["status"] != "unknown":
+                return self._public(record)
+            if not isinstance(result, dict) or result.get("source") != "current_erp_read" or type(result.get("verified")) is not bool:
+                raise ConnectorError("recheck_unverified", "未取得服务端实际只读回查依据，不能更新原操作状态。")
+            record["last_recheck"] = {"checked_at": time.time(), "result": result}
+            if result["verified"]:
+                record.update(status="succeeded", result=result, reconciled_at=time.time())
             self._write(connection, record)
             return self._public(record)

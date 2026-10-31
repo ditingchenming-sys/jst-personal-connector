@@ -70,6 +70,22 @@ async def test_connection_grant_trial_save_and_reuse_without_per_interface_appro
 
 
 @pytest.mark.asyncio
+async def test_fixed_callback_query_response_can_precheck_and_read_back_writes(setup):
+    registry, _, _, discovery, _ = setup
+    draft = await propose(setup)
+    envelope = json.dumps({"IsSuccess": True, "ReturnValue": json.dumps({"code": 0, "data": [{"sku": "A"}]})})
+    discovery.execute_read.return_value = {"status": 200, "content_type": "text/plain", "text": "0|" + envelope}
+    result = await registry.validate("codex", draft["interface_id"], {"style": "A"})
+    assert result["data"] == [{"sku": "A"}]
+    discovery.execute_read.return_value = {"status": 200, "content_type": "text/plain", "text": envelope}
+    assert (await registry.call("codex", draft["interface_id"], {"style": "B"}))["data"] == [{"sku": "A"}]
+    discovery.execute_read.return_value = {"status": 200, "content_type": "text/plain",
+                                          "text": '{"IsSuccess":false,"ReturnValue":"{}"}'}
+    with pytest.raises(ConnectorError):
+        await registry.call("codex", draft["interface_id"], {"style": "B"})
+
+
+@pytest.mark.asyncio
 async def test_connection_grant_allows_strict_page_entry_without_extra_approval(setup):
     registry, vault, *_ = setup
     assert registry.entry_allowed("codex", ENTRY_URL)

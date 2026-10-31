@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jst-personal-connector"
-version = "0.2.0"
+version = "0.3.0"
 description = "聚水潭个人连接器：独立登录、MCP 接入与员工执行通道"
 readme = "README.md"
 license = "MIT"

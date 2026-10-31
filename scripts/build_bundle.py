@@ -22,6 +22,8 @@ MODULES = {
     "ledger.py", "mcp_server.py", "service.py", "system_sdk.py",
     "system_runner.py", "vault.py", "management.html", "adapters/__init__.py", "adapters/login.py",
     "adapters/SOURCES.md",
+    "write_registry.py", "local_confirmation.py", "operation_confirmation.html",
+    "remote.py", "remote_client.py", "remote_login.html", "remote_confirmation.html",
 }
 DIST_INFO_FILES = {"METADATA", "WHEEL", "RECORD", "entry_points.txt"}
 
@@ -69,7 +71,7 @@ def _wheel_metadata(content):
         if metadata.get("License-Expression") != "MIT" or metadata.get_all("License-File") != ["LICENSE"]:
             raise ValueError("wheel 缺少明确的MIT许可证声明。")
         required = {"jst_connector/" + module for module in MODULES
-                    if module.endswith(".py") or module == "management.html"}
+                    if module.endswith((".py", ".html"))}
         required.update(f"{info_directory}/{name}" for name in DIST_INFO_FILES)
         required.add(f"{info_directory}/licenses/LICENSE")
         if not required <= set(names):

@@ -28,6 +28,51 @@ def _bearer(request: Request) -> str:
     return value[7:] if value.startswith("Bearer ") else ""
 
 
+async def dispatch_action(service, profile, action, body, *, manager_opener=None, base_url=""):
+    """本机与远程共用业务分派；profile只能由各传输层的可信授权派生。"""
+    if not isinstance(body, dict):
+        raise ConnectorError("invalid_request", "请求必须是 JSON 对象。")
+    if action == "status":
+        return await service.status(profile)
+    if action == "catalog":
+        return service.catalog(body.get("query", ""), profile=profile)
+    if action == "query":
+        return await service.query(profile, body["capability_id"], body.get("parameters", {}))
+    if action == "inspect":
+        return {"ok": True, "page": await service.browser.inspect_page(profile, body["url"])}
+    if action == "network":
+        return {"ok": True, "events": await service.browser.network_events(profile)}
+    if action == "discovery-start":
+        return await service.start_discovery(profile, body.get("url", ""), body.get("purpose", "查看聚水潭页面"))
+    if action == "discovery-inspect":
+        return await service.inspect_discovery(profile, body["discovery_id"], body.get("kind", "page"),
+                                               body.get("reference", ""), body.get("search", ""), body.get("offset", 0))
+    if action == "discovery-interact":
+        return await service.interact_discovery(profile, body["discovery_id"], body["element_ref"],
+                                                body["action"], body.get("value", ""))
+    if action == "interface-propose":
+        return await service.propose_read_interface(profile, body)
+    if action == "interface-validate":
+        return await service.validate_read_interface(profile, body["interface_id"], body.get("parameters", {}))
+    if action == "interface-call":
+        return await service.call_saved_interface(profile, body["interface_id"], body.get("parameters", {}))
+    if action == "interface-list":
+        return await service.list_interfaces(profile, body.get("query", ""))
+    if action == "write-propose":
+        return await service.propose_write_interface(profile, body)
+    if action == "write-preview":
+        return await service.preview_write_interface(profile, body["interface_id"], body.get("parameters", {}))
+    if action == "preview":
+        return await service.preview(profile, body["capability_id"], body.get("parameters", {}))
+    if action == "preview-status":
+        return {"ok": True, "preview": service.ledger.get_preview(profile, body["preview_id"])}
+    if action == "operation-recheck":
+        return await service.reconcile_operation(profile, body["preview_id"])
+    if action == "execute":
+        return await service.execute(profile, body["preview_id"], body["digest"])
+    raise ConnectorError("unsupported_action", "不支持此组件动作。")
+
+
 def create_app(service: ConnectorService, *, opener=webbrowser.open) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app):
@@ -47,6 +92,9 @@ def create_app(service: ConnectorService, *, opener=webbrowser.open) -> FastAPI:
             await service.close()
 
     app = FastAPI(title="聚水潭个人连接器", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    from .local_confirmation import LocalConfirmation
+    confirmation = LocalConfirmation(service, opener)
+    confirmation.install(app)
 
     @app.middleware("http")
     async def local_boundary(request: Request, call_next):
@@ -87,44 +135,13 @@ def create_app(service: ConnectorService, *, opener=webbrowser.open) -> FastAPI:
         body = await request.json()
         if not isinstance(body, dict):
             raise ConnectorError("invalid_request", "请求必须是 JSON 对象。")
-        if action == "status":
-            return await service.status(profile)
-        if action == "catalog":
-            return service.catalog(body.get("query", ""), profile=profile)
-        if action == "query":
-            return await service.query(profile, body["capability_id"], body.get("parameters", {}))
-        if action == "inspect":
-            return {"ok": True, "page": await service.browser.inspect_page(profile, body["url"])}
-        if action == "network":
-            return {"ok": True, "events": await service.browser.network_events(profile)}
-        if action == "discovery-start":
-            return await service.start_discovery(profile, body.get("url", ""), body.get("purpose", "查看聚水潭页面"))
-        if action == "discovery-inspect":
-            return await service.inspect_discovery(profile, body["discovery_id"], body.get("kind", "page"),
-                                                   body.get("reference", ""), body.get("search", ""), body.get("offset", 0))
-        if action == "discovery-interact":
-            return await service.interact_discovery(profile, body["discovery_id"], body["element_ref"],
-                                                    body["action"], body.get("value", ""))
-        if action == "interface-propose":
-            return await service.propose_read_interface(profile, body)
-        if action == "interface-validate":
-            return await service.validate_read_interface(profile, body["interface_id"], body.get("parameters", {}))
-        if action == "interface-call":
-            return await service.call_saved_interface(profile, body["interface_id"], body.get("parameters", {}))
-        if action == "interface-list":
-            return await service.list_interfaces(profile, body.get("query", ""))
-        if action == "preview":
-            return await service.preview(profile, body["capability_id"], body.get("parameters", {}))
-        if action == "preview-status":
-            return {"ok": True, "preview": service.ledger.get_preview(profile, body["preview_id"])}
-        if action == "execute":
-            return await service.execute(profile, body["preview_id"], body["digest"])
         if action == "open-manager":
             fragment = urlencode({"profile": profile, "token": service.vault.manager_token()})
-            # 管理能力只交给用户浏览器，不返回 AI 工具结果或请求日志。
             opened = await asyncio.to_thread(opener, str(request.base_url) + "ui#" + fragment)
             return {"ok": bool(opened), "message": "已请求打开本人登录授权页；连接完成后可关闭，回到AI或业务系统继续使用。"}
-        raise ConnectorError("unsupported_action", "不支持此组件动作。")
+        if action == "open-confirmation":
+            return await confirmation.open(profile, body["preview_id"], body["digest"], str(request.base_url))
+        return await dispatch_action(service, profile, action, body)
 
     @app.post("/manage/{action}")
     async def manage(action: str, request: Request):
