@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .config import platform_name
 from .errors import ConnectorError
 
 
@@ -29,8 +30,9 @@ def public_origin(value: str) -> str:
 
 
 class RemoteAgentClient:
-    def __init__(self, url: str, token: str | None = None, *, transport=None):
+    def __init__(self, url: str, token: str | None = None, *, transport=None, platform="erp"):
         self.url = public_origin(url)
+        self.platform = platform_name(platform)
         self.token = token if token is not None else os.environ.get("JST_CONNECTOR_ACCESS_TOKEN", "")
         if not isinstance(self.token, str) or not re.fullmatch(r"jst_remote_[A-Za-z0-9_-]{43}", self.token):
             raise ConnectorError("remote_token_required", "请由安全环境变量 JST_CONNECTOR_ACCESS_TOKEN 提供本员工本调用端的远程授权。")
@@ -43,7 +45,8 @@ class RemoteAgentClient:
             with httpx.Client(transport=self._transport, timeout=120, trust_env=False,
                               follow_redirects=False) as client:
                 response = client.post(self.url + "/api/" + action, json=body or {},
-                                       headers={"Authorization": "Bearer " + self.token})
+                                       headers={"Authorization": "Bearer " + self.token,
+                                                "X-JST-Platform": self.platform})
             if 300 <= response.status_code < 400:
                 raise ConnectorError("remote_redirect_rejected", "远程组件返回重定向，已停止；请核实配置地址和任务结果。")
             result = response.json()

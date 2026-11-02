@@ -24,6 +24,7 @@ MODULES = {
     "adapters/SOURCES.md",
     "write_registry.py", "local_confirmation.py", "operation_confirmation.html",
     "remote.py", "remote_client.py", "remote_login.html", "remote_confirmation.html",
+    "platform_policy.py", "platform_store.py", "drp.py", "erp_sso.py",
 }
 DIST_INFO_FILES = {"METADATA", "WHEEL", "RECORD", "entry_points.txt"}
 

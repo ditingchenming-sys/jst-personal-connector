@@ -169,7 +169,7 @@ class WriteRegistry:
         descriptor = self.discovery.get_request(profile, body.get("discovery_id"), body.get("request_id"))
         if hasattr(descriptor, "__await__"):
             descriptor = await descriptor
-        descriptor = InterfaceRegistry._descriptor(descriptor)
+        descriptor = self.reads.validate_descriptor(descriptor)
         if descriptor["request_id"] != body.get("request_id") or descriptor["source"]["discovery_id"] != body.get("discovery_id"):
             _fail("写入契约必须来自本次真实捕获请求。")
         # A query-shaped request may still have side effects. Explicitly placing it
@@ -190,6 +190,7 @@ class WriteRegistry:
             _fail("探索期间账号会话已变化。", "INTERFACE_SESSION_CHANGED")
         record = {"interface_id": "write_" + secrets.token_urlsafe(18), "kind": "write", "status": "ready_for_preview",
                   "profile": profile, "identity": identity, "session_binding": before[1], "created_at": time.time(),
+                  "platform": self.reads.site_policy.platform,
                   "name": InterfaceRegistry._text(body.get("name"), "操作名称"),
                   "purpose": InterfaceRegistry._text(body.get("purpose"), "操作用途"),
                   "descriptor": descriptor, "parameters": parameters, "response_rules": rules,
@@ -259,7 +260,8 @@ class WriteRegistry:
                 return {key: canonical(item) for key, item in value.items()
                         if str(key).casefold() not in _IDENTITY and not _SECRET.search(str(key))}
             return [canonical(item) for item in value] if isinstance(value, list) else value
-        operation_key = hashlib.sha256(_json({"company_id": record["identity"]["company_id"],
+        operation_key = hashlib.sha256(_json({"platform": self.reads.site_policy.platform,
+                                             "company_id": record["identity"]["company_id"],
                                              "request": canonical(payload["request"])})).hexdigest()
         return self.ledger.create_preview(profile, record["identity"], payload, checks,
                                           execution_boundary="single_object_request", operation_key=operation_key,

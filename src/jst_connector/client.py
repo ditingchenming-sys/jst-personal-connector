@@ -14,6 +14,7 @@ from filelock import FileLock
 
 from .config import profile_name
 from .errors import ConnectorError
+from .platform_store import ensure_platform
 from .vault import Vault
 
 
@@ -31,8 +32,9 @@ def validate_agent_url(url: str) -> str:
 
 
 class AgentClient:
-    def __init__(self, root: Path, profile: str, *, auto_start=True):
+    def __init__(self, root: Path, profile: str, *, auto_start=True, platform="erp"):
         self.root = Path(root)
+        self.platform = ensure_platform(self.root, platform)
         self.profile = profile_name(profile)
         self.vault = Vault(self.root)
         self.token = self.vault.ensure_client(self.profile)
@@ -43,10 +45,15 @@ class AgentClient:
         if not state.exists():
             return None
         try:
-            url = validate_agent_url(json.loads(state.read_text(encoding="utf-8"))["url"])
+            metadata = json.loads(state.read_text(encoding="utf-8"))
+            if not isinstance(metadata, dict) or metadata.get("platform", "erp") != self.platform:
+                return None
+            url = validate_agent_url(metadata["url"])
             response = httpx.get(url + "/health", timeout=1, trust_env=False, follow_redirects=False)
-            if response.status_code == 200 and response.json().get("ok") is True:
-                return url
+            if response.status_code == 200:
+                health = response.json()
+                if health.get("ok") is True and health.get("platform", "erp") == self.platform:
+                    return url
         except (OSError, ValueError, KeyError, httpx.HTTPError, ConnectorError):
             pass
         return None
@@ -63,7 +70,10 @@ class AgentClient:
                 kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
             else:
                 kwargs["start_new_session"] = True
-            subprocess.Popen([sys.executable, "-m", "jst_connector", "serve", "--data-dir", str(self.root)], **kwargs)
+            arguments = [sys.executable, "-m", "jst_connector", "serve", "--data-dir", str(self.root)]
+            if self.platform != "erp":
+                arguments.extend(["--platform", self.platform])
+            subprocess.Popen(arguments, **kwargs)
             for _ in range(100):
                 time.sleep(0.1)
                 url = self._running_url()
@@ -75,7 +85,8 @@ class AgentClient:
         url = self.ensure_running()
         try:
             response = httpx.post(url + "/api/" + action, json=body or {},
-                                  headers={"Authorization": "Bearer " + self.token}, timeout=90,
+                                  headers={"Authorization": "Bearer " + self.token,
+                                           "X-JST-Platform": self.platform}, timeout=90,
                                   trust_env=False, follow_redirects=False)
             result = response.json()
             if not isinstance(result, dict):

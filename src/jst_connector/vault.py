@@ -177,11 +177,15 @@ class Vault:
             session = self._read()["sessions"].get(_profile(profile))
             return session["binding"] if session else None
 
-    def clear_session(self, profile: str) -> None:
+    def clear_session(self, profile: str, *, expected_binding: Any = _UNSET) -> bool:
         with self._lock:
             data = self._read()
+            existing = data["sessions"].get(_profile(profile))
+            if expected_binding is not _UNSET and (not existing or existing["binding"] != expected_binding):
+                return False
             data["sessions"].pop(_profile(profile), None)
             self._write(data)
+            return True
 
     def ensure_client(self, profile: str) -> str:
         with self._lock:

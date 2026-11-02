@@ -21,15 +21,18 @@ def _client_argument(value):
         raise argparse.ArgumentTypeError(error.message) from None
 
 
-def _write_config(root: Path, client: str, kind: str, remote_url: str | None = None) -> str:
+def _write_config(root: Path, client: str, kind: str, remote_url: str | None = None, platform="erp") -> str:
     args = ["-m", "jst_connector", "mcp", "--client", client, "--data-dir", str(root)]
+    if platform != "erp":
+        args.extend(["--platform", platform])
+    connector_name = "jushuitan-drp" if platform == "drp" else "jushuitan"
     if remote_url:
         from .remote_client import public_origin
         args.extend(["--remote-url", public_origin(remote_url)])
     if kind == "codex":
         # JSON quoted basic strings are also valid TOML basic strings.
-        return "[mcp_servers.jushuitan]\ncommand = " + json.dumps(sys.executable, ensure_ascii=False) + "\nargs = " + json.dumps(args, ensure_ascii=False) + "\nstartup_timeout_sec = 30\ntool_timeout_sec = 120\n"
-    return json.dumps({"mcpServers": {"jushuitan": {"type": "stdio", "command": sys.executable,
+        return "[mcp_servers." + connector_name + "]\ncommand = " + json.dumps(sys.executable, ensure_ascii=False) + "\nargs = " + json.dumps(args, ensure_ascii=False) + "\nstartup_timeout_sec = 30\ntool_timeout_sec = 120\n"
+    return json.dumps({"mcpServers": {connector_name: {"type": "stdio", "command": sys.executable,
                                                      "args": args, "timeout": 120000}}}, ensure_ascii=False, indent=2) + "\n"
 
 
@@ -58,9 +61,11 @@ def main(argv=None):
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("init", "serve", "mcp", "open", "status", "catalog", "config", "doctor",
-                    "serve-remote", "employee-add", "employee-token", "employee-disable"):
+                    "serve-remote", "employee-add", "employee-token", "employee-disable", "link-erp"):
         part = sub.add_parser(command)
         part.add_argument("--data-dir", type=Path)
+        part.add_argument("--platform", choices=("erp", "drp"), default="erp",
+                          help="erp=聚水潭ERP；drp=聚水潭分销。两者使用独立运行目录和授权。")
         if command in ("init", "mcp", "open", "status", "catalog", "config"):
             part.add_argument("--client", default="codex", type=_client_argument)
         if command == "serve":
@@ -75,17 +80,47 @@ def main(argv=None):
             part.add_argument("--token-output", required=True, type=Path, help="员工调用凭证文件；须安全保管，不放入源码或安装包")
         if command == "employee-add":
             part.add_argument("--password-file", type=Path, help="可选：仅当前用户可读的员工密码文件；省略时隐藏输入")
+        if command == "link-erp":
+            part.add_argument("--client", default="codex", type=_client_argument)
+            part.add_argument("--erp-data-dir", required=True, type=Path)
+            part.add_argument("--erp-client", type=_client_argument)
+            part.add_argument("--username", help="远程部署时配对目标员工账号")
+            part.add_argument("--erp-username", help="远程部署时来源ERP员工账号，缺省与目标一致")
         if command in ("mcp", "open", "status", "catalog", "config"):
             part.add_argument("--remote-url", help="远程组件 HTTPS 域名；访问凭证由 JST_CONNECTOR_ACCESS_TOKEN 提供")
         if command == "config":
             part.add_argument("--format", choices=("codex", "workbuddy", "generic"), required=True)
             part.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    root = data_directory(args.data_dir)
+    root = data_directory(args.data_dir, platform=args.platform)
     try:
-        if args.command in ("employee-add", "employee-token", "employee-disable"):
+        if args.command == "link-erp":
+            from .erp_sso import ErpLinks
+            from .platform_store import ensure_platform
             from .remote import EmployeeStore
             from .vault import Vault
+            if args.platform != "drp":
+                raise ConnectorError("platform_mismatch", "请使用 --platform drp 为分销连接配对ERP来源。")
+            args.erp_data_dir = args.erp_data_dir.expanduser().resolve()
+            if not (args.erp_data_dir / "vault.enc").is_file():
+                raise ConnectorError("erp_login_required", "请先连接ERP，并指定其已有运行目录；未创建来源账号资料。")
+            ensure_platform(root, "drp")
+            ensure_platform(args.erp_data_dir, "erp")
+            target_vault, source_vault = Vault(root), Vault(args.erp_data_dir)
+            target_profile, source_profile = args.client, args.erp_client or args.client
+            if args.username:
+                target_profile = EmployeeStore(root, target_vault).connection_profile(args.username, args.client)
+                source_profile = EmployeeStore(args.erp_data_dir, source_vault).connection_profile(
+                    args.erp_username or args.username, args.erp_client or args.client)
+            elif args.erp_username:
+                raise ConnectorError("erp_link_invalid", "远程员工配对须同时指定目标员工账号。")
+            print(json.dumps(ErpLinks(root, target_vault).pair(target_profile, args.erp_data_dir, source_profile), ensure_ascii=False))
+            return
+        if args.command in ("employee-add", "employee-token", "employee-disable"):
+            from .platform_store import ensure_platform
+            from .remote import EmployeeStore
+            from .vault import Vault
+            ensure_platform(root, args.platform)
             store = EmployeeStore(root, Vault(root))
             if args.command == "employee-disable":
                 store.disable(args.username)
@@ -116,13 +151,16 @@ def main(argv=None):
             return
         if args.command == "serve-remote":
             from .remote import serve_remote
-            serve_remote(root, origin=args.public_url, port=args.port)
+            serve_remote(root, origin=args.public_url, port=args.port, platform=args.platform)
             return
         if args.command == "doctor":
             from cryptography.fernet import Fernet
             from playwright.sync_api import sync_playwright
 
+            from .platform_store import ensure_platform
             from .vault import Vault, _dpapi
+            if root.exists():
+                ensure_platform(root, args.platform)
             key_error = None
             try:
                 external_key = os.environ.get("JST_CONNECTOR_MASTER_KEY")
@@ -154,7 +192,7 @@ def main(argv=None):
                 raise SystemExit(1)
             return
         if args.command == "config":
-            content = _write_config(root, args.client, args.format, args.remote_url)
+            content = _write_config(root, args.client, args.format, args.remote_url, args.platform)
             if args.output:
                 args.output.parent.mkdir(parents=True, exist_ok=True)
                 # 不覆盖用户已有配置，安装者按说明合并到对应客户端。
@@ -166,20 +204,20 @@ def main(argv=None):
             return
         if args.command == "serve":
             from .agent import serve
-            serve(root, port=args.port)
+            serve(root, port=args.port, platform=args.platform)
             return
         if args.command == "mcp":
             from .mcp_server import create_server
             from .remote_client import RemoteAgentClient
-            remote = RemoteAgentClient(args.remote_url) if args.remote_url else None
-            create_server(root, args.client, client=remote).run(transport="stdio")
+            remote = RemoteAgentClient(args.remote_url, platform=args.platform) if args.remote_url else None
+            create_server(root, args.client, client=remote, platform=args.platform).run(transport="stdio")
             return
         from .client import AgentClient
         if getattr(args, "remote_url", None):
             from .remote_client import RemoteAgentClient
-            client = RemoteAgentClient(args.remote_url)
+            client = RemoteAgentClient(args.remote_url, platform=args.platform)
         else:
-            client = AgentClient(root, args.client)
+            client = AgentClient(root, args.client, platform=args.platform)
         if args.command == "init":
             result = {"ok": True, "client": args.client, "data_dir": str(root),
                       "message": "已初始化独立调用端；尚未登录聚水潭。"}

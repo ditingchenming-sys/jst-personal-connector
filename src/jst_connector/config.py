@@ -8,17 +8,26 @@ from pathlib import Path
 from .errors import ConnectorError
 
 
-def data_directory(value: str | Path | None = None) -> Path:
+def platform_name(value: str) -> str:
+    if not isinstance(value, str) or value not in {"erp", "drp"}:
+        raise ConnectorError("invalid_platform", "平台须为 erp（聚水潭ERP）或 drp（分销平台）。")
+    return value
+
+
+def data_directory(value: str | Path | None = None, *, platform="erp") -> Path:
+    platform = platform_name(platform)
     if value is not None:
         return Path(value).expanduser().resolve()
     configured = os.environ.get("JST_CONNECTOR_DATA_DIR")
     if configured:
-        return Path(configured).expanduser().resolve()
+        base = Path(configured).expanduser().resolve()
+        return base / "drp" if platform == "drp" else base
     if os.name == "nt":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
     else:
         base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return base / "jst-personal-connector"
+    root = base / "jst-personal-connector"
+    return root / "drp" if platform == "drp" else root
 
 
 def profile_name(value: str) -> str:

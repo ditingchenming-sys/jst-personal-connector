@@ -465,6 +465,17 @@ class BrowserManager:
     async def password_login(self, profile, username, password, remember=False, terms_accepted=False):
         return await self._password_flows.password_login(profile, username, password, remember, terms_accepted)
 
+    async def discard_if_binding(self, profile, binding):
+        """撤销本次新登录的CAS绑定，不清除另一进程后来建立的新会话。"""
+        async with self._lock(profile):
+            removed = self.vault.clear_session(profile, expected_binding=binding)
+            session = self._sessions.get(profile)
+            if session and session.vault_binding == binding:
+                self._sessions.pop(profile, None)
+                await self._cleanup_profile(profile)
+                await session.context.close()
+            return removed
+
     async def login_status(self, profile):
         return await self._password_flows.login_status(profile)
 

@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from .adapters import ORDER_URL, PURCHASE_URL
 from .adapters.login import ENTRY_URL
 from .errors import ConnectorError
+from .platform_policy import get_policy
 from .vault import _json
 
 _HOSTS = {"www.erp321.com", "src.erp321.com", "api.erp321.com", "apiweb.erp321.com"}
@@ -160,6 +161,8 @@ def _reject_serialized_container(value):
 class InterfaceRegistry:
     def __init__(self, root, vault, browser, discovery):
         self.root, self.vault, self.browser, self.discovery = Path(root), vault, browser, discovery
+        self.site_policy = (getattr(browser, "site_policy", None) or getattr(discovery, "site_policy", None)
+                            or get_policy(getattr(browser, "platform", "erp")))
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = self.root / "interfaces.sqlite3"
         self._locks = {}
@@ -185,7 +188,10 @@ class InterfaceRegistry:
 
     @staticmethod
     def _digest(record):
-        return hashlib.sha256(_json({k: record.get(k) for k in _IMMUTABLE})).hexdigest()
+        fields = {k: record.get(k) for k in _IMMUTABLE}
+        if "platform" in record:
+            fields["platform"] = record["platform"]
+        return hashlib.sha256(_json(fields)).hexdigest()
 
     def _session(self, profile):
         before = self.vault.session_binding(profile)
@@ -198,6 +204,8 @@ class InterfaceRegistry:
         return saved["identity"], binding
 
     def _assert_current(self, record):
+        if record.get("platform", "erp") != self.site_policy.platform:
+            _fail("保存契约不属于当前连接平台，不能跨平台执行。", "INTERFACE_PLATFORM_MISMATCH")
         identity, binding = self._session(record["profile"])
         if identity != record["identity"] or binding != record["session_binding"]:
             _fail("接口契约所绑定的账号会话已变化，请重新发现并审核。", "INTERFACE_SESSION_CHANGED")
@@ -219,7 +227,8 @@ class InterfaceRegistry:
     def _new(self, profile, kind, **values):
         identity, binding = self._session(profile)
         record = {"interface_id": secrets.token_urlsafe(18), "profile": profile, "identity": identity,
-                  "session_binding": binding, "kind": kind, "created_at": time.time(), **values}
+                  "session_binding": binding, "kind": kind, "created_at": time.time(),
+                  "platform": self.site_policy.platform, **values}
         record["digest"] = self._digest(record)
         with self._connection(True) as c:
             self._write(c, record)
@@ -235,6 +244,8 @@ class InterfaceRegistry:
     def get(self, profile, identifier):
         with self._connection() as c:
             record = self._read(c, profile, identifier)
+        if record.get("platform", "erp") != self.site_policy.platform:
+            _fail("找不到当前平台的接口契约。", "INTERFACE_NOT_FOUND")
         identity, binding = self._session(profile)
         if identity != record["identity"]:
             _fail("找不到当前账号的接口或入口契约。", "INTERFACE_NOT_FOUND")
@@ -272,15 +283,16 @@ class InterfaceRegistry:
         current, _ = self._session(profile)
         if identity != current:
             _fail("账号已变化，未创建页面入口。", "INTERFACE_SESSION_CHANGED")
-        url = _url(url, entry=True)
+        url = self.validate_url(url, entry=True)
         self._text(purpose, "探索用途")
-        return {"entry_id": None, "interface_id": None, "kind": "entry", "status": "builtin" if url in _BUILTINS else "connection_read_authorized",
+        builtins = _BUILTINS if self.site_policy.platform == "erp" else self.site_policy.navigation_urls
+        return {"entry_id": None, "interface_id": None, "kind": "entry", "status": "builtin" if url in builtins else "connection_read_authorized",
                 "url": url, "digest": None}
 
     def entry_allowed(self, profile, url):
         try:
             self._session(profile)
-            _url(url, entry=True)
+            self.validate_url(url, entry=True)
         except ConnectorError:
             return False
         return True
@@ -304,12 +316,28 @@ class InterfaceRegistry:
                 self._write(c, record)
             return self._public(record)
 
+    def validate_url(self, value, *, entry=False):
+        if self.site_policy.platform == "erp":
+            return _url(value, entry=entry)
+        if not self.site_policy.business_url(value):
+            _fail("地址不属于当前平台已核实的业务域及路径，未访问。")
+        parts = urlsplit(value)
+        if entry and not self.site_policy.page_url(value):
+            _fail("该地址不是当前平台可读取的普通页面，不能借页面执行认证或业务动作。")
+        if not entry and parts.query:
+            _fail("接口地址不得夹带查询串，查询字段须保存在固定请求结构中。")
+        return value
+
+    def validate_descriptor(self, value):
+        return self._descriptor(value, url_validator=self.validate_url)
+
     @staticmethod
-    def _descriptor(value):
+    def _descriptor(value, *, url_validator=None):
         if not isinstance(value, dict):
             _fail("候选请求格式无效。")
         d = copy.deepcopy(value)
-        _url(d.get("url"))
+        check_url = url_validator or _url
+        check_url(d.get("url"))
         if _AUTH_PATH.search(urlsplit(d["url"]).path) or _SECRET.search(urlsplit(d["url"]).path):
             _fail("认证和凭据接口不能保存为业务查询。")
         if d.get("method") not in {"GET", "POST"} or d.get("encoding") not in {"json", "form", "none"}:
@@ -327,7 +355,7 @@ class InterfaceRegistry:
         if (source.get("blocked") is not True or not isinstance(d.get("request_id"), str) or not d["request_id"]
                 or not isinstance(source.get("discovery_id"), str) or not source["discovery_id"]):
             _fail("缺少实际探索捕获的请求来源，不能形成只读契约。")
-        _url(source.get("page_url"), entry=True)
+        check_url(source.get("page_url"), entry=True)
         bindings = d.get("identity_bindings", [])
         if not isinstance(bindings, list):
             _fail("身份字段映射无效。")
@@ -448,7 +476,7 @@ class InterfaceRegistry:
         return "write" if writing else "query" if reading else "unclassified"
 
     def _recheck_contract(self, record):
-        descriptor = self._descriptor(record["descriptor"])
+        descriptor = self.validate_descriptor(record["descriptor"])
         parameters = self._parameters(record["parameters"], descriptor)
         rules = self._rules(record["response_rules"])
         if self._classify(descriptor, record["read_evidence"]) != "query":
@@ -465,7 +493,7 @@ class InterfaceRegistry:
         descriptor = self.discovery.get_request(profile, discovery_id, request_id)
         if hasattr(descriptor, "__await__"):
             descriptor = await descriptor
-        descriptor = self._descriptor(descriptor)
+        descriptor = self.validate_descriptor(descriptor)
         if descriptor["request_id"] != request_id or descriptor["source"]["discovery_id"] != discovery_id:
             _fail("实际捕获来源与当前请求编号不一致。", "INTERFACE_INVALID")
         parameters, rules = self._parameters(parameters, descriptor), self._rules(response_rules)
@@ -511,7 +539,7 @@ class InterfaceRegistry:
             self._parameter_value(p, value)
             _put(descriptor, p["path"], value)
         descriptor["_scope"] = {"profile": record["profile"], "identity": copy.deepcopy(record["identity"]),
-                                "session_binding": record["session_binding"]}
+                                "session_binding": record["session_binding"], "platform": self.site_policy.platform}
         return descriptor
 
     async def _execute(self, profile, identifier, values, validating):

@@ -1,6 +1,6 @@
 # 安装与更新
 
-需要 Python 3.11+、网络访问和支持 MCP stdio 的 AI 客户端。当前版本 0.3.0，可选本机组件或自己部署的 Linux 多员工 HTTPS 服务。GitHub 只分发安装包，不代管任何账号或业务服务。
+需要 Python 3.11+、网络访问和支持 MCP stdio 的 AI 客户端。当前版本 0.4.0，可选 ERP 或分销平台、本机组件或自己部署的 Linux 多员工 HTTPS 服务。GitHub 只分发安装包，不代管任何账号或业务服务。
 
 ## 完整分发包
 
@@ -137,6 +137,53 @@ python -m jst_connector config --client workbuddy --format workbuddy \
 工作台可通过每员工各自令牌调用同一 `/api/{action}`；不能用共享令牌加请求参数 `profile/employee_id` 代替身份映射。具体工作台还须接好账号分配、秘密保存和可信确认；本仓库发布不等于已改动某个外部工作台。
 
 后端参考：[FastAPI 身份认证](https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/)、[Playwright 请求观察](https://playwright.dev/python/docs/network)。本实现使用服务端存储的随机会话及盐化密码摘要，接口调用与浏览器确认的权限分别校验。
+
+## 聚水潭分销平台
+
+官方分销统一登录：`https://account.scm121.com/user/login`；业务入口：`https://sc.scm121.com/`。使用本包的 `--platform drp`，不需要另外安装一套工作台适配器才能访问分销域。
+
+本机生成独立连接器条目：
+
+```sh
+python -m jst_connector config --platform drp --client codex --format codex --output codex-drp.toml
+python -m jst_connector config --platform drp --client workbuddy --format workbuddy --output workbuddy-drp.json
+```
+
+配置条目名 `jushuitan-drp`，保留已有 `jushuitan`。默认分销运行目录为默认 ERP 目录下的 `drp/`；若指定 `--data-dir`，须使用新的独立目录。每个目录通过 `.platform.json` 绑定平台；已有 ERP 资料不会被改为分销资料，也不复制已有 ERP Cookie。平台不能由模型工具参数切换。
+
+首次调用分销连接器的 `open_connection_manager`，在本人授权页独立登录分销，验证码仅按原系统要求由本人完成。连接器以官方认证回执和分销当前用户接口交叉核对身份，再加密保存；之后优先恢复分销自身的有效登录态。
+
+已有本人ERP连接时，可先配置一次来源配对，免填分销账号密码接续：
+
+```sh
+python -m jst_connector link-erp --platform drp --client codex \
+  --erp-data-dir /实际ERP运行目录 --erp-client codex
+```
+
+分销若使用自定义目录，还需给此命令传入同一 `--data-dir`。随后本人打开分销授权页，点击“使用已登录的ERP接续分销”。来源必须是连接器已验证并保存的本人ERP会话，不能使用未导入或未授权的其他浏览器会话。后台固定调用ERP官方 `GetRedirectTokenV2` 换发分销授权，再核验分销身份；源身份变化、换发失败或验证失败时停止，可继续使用独立分销登录。
+
+远程部署与员工授权同样固定为分销平台，并使用独立域名/运行目录及各自令牌：
+
+```sh
+python -m jst_connector serve-remote --platform drp --data-dir /var/lib/jst-drp \
+  --public-url https://drp-connector.example.com --port 8766
+python -m jst_connector employee-add --platform drp --data-dir /var/lib/jst-drp \
+  --username alice --client workbench --token-output /var/lib/jst-credentials/alice-drp.json
+```
+
+员工客户端配置也加 `--platform drp --remote-url https://drp-connector.example.com`，注入该员工的分销专属 `JST_CONNECTOR_ACCESS_TOKEN`。同一市场条目可以提供 ERP 与 `jst-drp` 两个连接条目，但不能共用访问令牌或根据请求自报的员工编号切换身份。
+
+需要远程员工ERP接续时，由服务器本机管理员核对两侧员工和调用端后配对：
+
+```sh
+python -m jst_connector link-erp --platform drp --data-dir /var/lib/jst-drp \
+  --username alice --client workbench --erp-data-dir /var/lib/jst-erp \
+  --erp-username alice --erp-client workbench
+```
+
+两侧目录都须是已配置、可由当前运行环境解密的独立存储，来源ERP员工须先完成本人登录。用户名相同不代表系统自动认定同一人，以上配对由管理员核对并明确配置。源或目标重新登录、退出、公司切换均受会话绑定核对；两平台的实际公司/员工编号不要求数值相同。
+
+本版身份协议工程验收以官方 `sc` 供货侧当前用户接口为依据；其他入口或角色须按实际身份协议继续核验，不能套用供货侧字段或冒称全部角色已真实验收。查询与写入按同样的实际请求发现、预览、可信确认和回查机制使用，不设固定业务名称清单。
 
 ## 登录资料与更新
 

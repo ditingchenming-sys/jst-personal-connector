@@ -1,6 +1,6 @@
 # AI 接入说明
 
-本仓库是公开接入入口。0.3.0 提供本机和多员工 HTTPS 服务两种运行方式，均可通过 MCP stdio 适配器使用；不要把仓库 URL 或员工 HTTPS 服务地址当作远程 MCP 协议地址。
+本仓库是公开接入入口。0.4.0 提供本机和多员工 HTTPS 服务两种运行方式，原生支持 ERP 与分销板块，均可通过 MCP stdio 适配器使用；不要把仓库 URL 或员工 HTTPS 服务地址当作远程 MCP 协议地址。
 
 稳定入口：[仓库说明](https://github.com/ditingchenming-sys/jst-personal-connector)、[最新发布](https://github.com/ditingchenming-sys/jst-personal-connector/releases/latest)。接入时读取 `main` 上的当前说明，再选择已发布版本。
 
@@ -11,6 +11,14 @@
 3. 每个 AI 使用独立 `--client`，例如 `codex`、`workbuddy`。用本机安装环境的 `jst-connector config` 生成配置，再合并到该 AI 的实际 MCP 配置；保留其他 MCP 设置，不复制维护者电脑的绝对路径。
 4. 配置命令不登录账号、不修改 AI 全局配置。启动 MCP 后先列出工具，应有 18 个；调用 `connector_status`，已有有效会话先恢复，只有需要登录时调用 `open_connection_manager`。远程部署使用管理员分配给本人本调用端的凭证，由 `JST_CONNECTOR_ACCESS_TOKEN` 注入，配置增加 `--remote-url https://实际域名`。远程返回的普通登录链接可交本人打开。
 5. 本人在连接器页面填写账号、密码、协议同意及必要验证码。不要索取、复制或输出密码、Cookie、验证码、主密钥或带授权的管理页地址。登录完成后关闭该页，继续在 AI 对话中使用。
+
+## 分销板块接入
+
+- 聚水潭分销是独立大板块，官方登录入口为 `https://account.scm121.com/user/login`。本包使用 `--platform drp`，配置生成的条目名为 `jushuitan-drp`；已有工作台可继续将 `jst-drp` 映射同一安装包或市场条目，但其调用凭证、平台和数据目录必须独立。
+- `jst-connector config --platform drp --client codex --format codex --output codex-drp.toml` 生成分销配置；远程服务端和客户端均须设置 `--platform drp`。错误地连到 ERP 实例会在工具分派前拒绝，不能靠请求参数改变平台。
+- 初次可在本人授权页直接登录分销。若已有本人已验证的ERP连接，可按 `INSTALL.md` 使用本机管理员命令 `link-erp` 配对来源；分销授权页会显示“使用已登录的ERP接续分销”，服务器通过官方换发接口取得分销令牌，再核实分销当前用户，不复制ERP Cookie、不把令牌交给模型。
+- 接续来源仅来自已保存的管理员配对，不接受模型或MCP参数提供来源员工、公司、路径、令牌。两平台的员工/公司编号不假设相同；源ERP会话变化会撤销本次新建的分销连接。
+- ERP 与分销共享通用查询/写入工具和流程，保存契约按固定平台隔离；不能把 ERP 的 Q/W 快捷能力当作分销已适配接口。分销首次按实际页面、请求、当前用户和业务回查形成契约。
 
 ## 按需求调用
 

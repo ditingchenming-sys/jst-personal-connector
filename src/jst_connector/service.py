@@ -10,15 +10,22 @@ from .erp import ErpClient
 from .errors import ConnectorError
 from .identity import ServerIdentityVerifier
 from .ledger import Ledger
+from .platform_store import ensure_platform
 from .vault import Vault
 
 
 class ConnectorService:
-    def __init__(self, root: Path, *, vault=None, browser=None, erp=None):
+    def __init__(self, root: Path, *, vault=None, browser=None, erp=None, platform="erp"):
         self.root = Path(root)
+        self.platform = ensure_platform(self.root, platform)
         self.vault = vault or Vault(self.root)
-        self.browser = browser or BrowserManager(self.vault, identity_verifier=ServerIdentityVerifier())
-        self.erp = erp or ErpClient(self.browser)
+        if self.platform == "drp":
+            from .drp import DrpBrowserManager, DrpClient
+            self.browser = browser or DrpBrowserManager(self.vault)
+            self.erp = erp or DrpClient(self.browser)
+        else:
+            self.browser = browser or BrowserManager(self.vault, identity_verifier=ServerIdentityVerifier())
+            self.erp = erp or ErpClient(self.browser)
         self.ledger = Ledger(self.root, self.vault)
         self._discovery = None
         self._interfaces = None
@@ -52,7 +59,8 @@ class ConnectorService:
         from .adapters.login import ENTRY_URL
         await self.browser.identity(profile)
         discovery, interfaces = self._generic()
-        url = url or ENTRY_URL
+        policy = getattr(self.browser, "site_policy", None)
+        url = url or (policy.entry_url if policy else ENTRY_URL)
         binding = self.vault.session_binding(profile)
         if not interfaces.entry_allowed(profile, url):
             raise ConnectorError("DISCOVERY_ENTRY_REJECTED", "该地址不符合当前连接可探查的聚水潭普通页面范围，未访问。")
@@ -101,7 +109,20 @@ class ConnectorService:
             raise ConnectorError("management_authorization_required", "此操作仅限本人管理页面或可信系统授权。")
 
     async def status(self, profile: str) -> dict:
-        return {"ok": True, "client": profile, "connection": await self.browser.status(profile)}
+        return {"ok": True, "client": profile, "platform": self.platform,
+                "connection": await self.browser.status(profile)}
+
+    def login_options(self, profile=None):
+        if self.platform == "drp":
+            from .drp import LOGIN_TERMS
+            from .erp_sso import ErpLinks
+            sso_available = bool(profile and ErpLinks(self.root, self.vault).get(profile))
+        else:
+            from .adapters.login import LOGIN_TERMS
+            sso_available = False
+        return {"ok": True, "platform": self.platform, "terms": LOGIN_TERMS,
+                "erp_sso_available": sso_available,
+                "platform_name": "聚水潭分销平台" if self.platform == "drp" else "聚水潭ERP"}
 
     def catalog(self, query: str = "", profile: str | None = None) -> dict:
         catalog = self.erp.catalog()

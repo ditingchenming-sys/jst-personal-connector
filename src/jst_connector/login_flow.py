@@ -273,7 +273,7 @@ class PasswordLoginFlows:
         async with self._lock(profile):
             attempt = self.attempts.get(profile)
             if not attempt or not self.active(profile) or attempt.status != "need_code":
-                raise ConnectorError("SMS_NOT_REQUIRED", "ERP当前没有明确要求短信验证，不能发送验证码。")
+                raise ConnectorError("SMS_NOT_REQUIRED", "原系统当前没有明确要求短信验证，不能发送验证码。")
             if not self._snapshot(attempt)["can_send_code"]:
                 raise ConnectorError("LOGIN_RATE_LIMITED", "请等待短信发送冷却结束；每个调用端10分钟内最多发送三次。")
             attempt.last_send = time.monotonic()
@@ -290,7 +290,7 @@ class PasswordLoginFlows:
         async with self._lock(profile):
             attempt = self.attempts.get(profile)
             if not attempt or not self.active(profile) or attempt.status != "need_code" or not attempt.sent:
-                raise ConnectorError("SMS_NOT_REQUIRED", "请仅在ERP要求并已发送短信后提交验证码。")
+                raise ConnectorError("SMS_NOT_REQUIRED", "请仅在原系统要求并已发送短信后提交验证码。")
             if attempt.busy or self._snapshot(attempt)["code_retry_after_seconds"]:
                 raise ConnectorError("LOGIN_RATE_LIMITED", "验证码提交过于频繁或已达到五分钟五次上限；取消重开不会重置限制。")
             attempt.last_code = time.monotonic()
@@ -340,10 +340,10 @@ class PasswordLoginFlows:
             raise
         except ConnectorError as error:
             messages = {
-                "LOGIN_FLOW_UNADAPTED": "ERP要求当前未适配的验证，已停止；不会自动发短信或反复提交账号密码。",
+                "LOGIN_FLOW_UNADAPTED": "原系统要求当前未适配的验证，已停止；不会自动发短信或反复提交账号密码。",
                 "LOGIN_FORM_UNADAPTED": "官方登录表单已变化，当前未适配，已停止填写。",
-                "SMS_FLOW_UNADAPTED": "ERP当前短信验证步骤尚未适配，已停止；没有自动重发。",
-                "LOGIN_AUTH_REJECTED": "ERP未通过本次账号密码认证，请核对后手动重试。",
+                "SMS_FLOW_UNADAPTED": "原系统当前短信验证步骤尚未适配，已停止；没有自动重发。",
+                "LOGIN_AUTH_REJECTED": "原系统未通过本次账号密码认证，请核对后手动重试。",
                 "LOGIN_FLOW_TIMEOUT": "未收到已核实的认证结果，已停止本次提交；不会自动重试。",
             }
             attempt.status = "cancelled" if attempt.cancelled else "failed"
@@ -355,7 +355,7 @@ class PasswordLoginFlows:
                 attempt.status, attempt.message = "cancelled", "本次后台登录已取消。"
                 attempt.error_code = "LOGIN_CANCELLED"
             else:
-                attempt.status, attempt.message = "failed", "后台登录未完成，请核对账号、密码或当前ERP验证要求后重试。"
+                attempt.status, attempt.message = "failed", "后台登录未完成，请核对账号、密码或当前平台验证要求后重试。"
                 attempt.error_code = "LOGIN_FAILED"
         finally:
             self._clear(attempt)
@@ -364,7 +364,7 @@ class PasswordLoginFlows:
 
     async def _finish(self, profile, attempt):
         if self.browser._verifier is None:
-            attempt.status, attempt.message = "identity_pending", "ERP认证已通过，当前公司及员工的可信核验仍待适配，业务调用保持阻断。"
+            attempt.status, attempt.message = "identity_pending", "原系统认证已通过，当前公司及员工的可信核验仍待适配，业务调用保持阻断。"
             # Retain only in-memory browser progress until the explicit login timeout/cancellation.
             await asyncio.Future()
         credentials = {"username": attempt.username, "password": attempt.password,
@@ -407,7 +407,7 @@ class PasswordLoginFlows:
                     return
                 attempt.username, attempt.password = credentials["username"], credentials["password"]
                 attempt.remember, attempt.terms_accepted = True, True
-        attempt.status, attempt.message = "logging_in", "正在后台使用本人账号密码登录；仅ERP要求时才需要短信。"
+        attempt.status, attempt.message = "logging_in", "正在后台使用本人账号密码登录；仅原系统要求时才需要短信。"
         starts = self._history(self.password_history, profile, 300)
         if len(starts) >= 5 or (starts and time.monotonic() - starts[-1] < self.password_cooldown):
             attempt.status, attempt.message = "failed", "账号密码提交过于频繁，请稍后重试；取消后重开不会重置限制。"
@@ -429,7 +429,7 @@ class PasswordLoginFlows:
                 return
             if signal in {"login_notice", "notice_unverified", "site_mismatch"}:
                 attempt.status = "notice_pending"
-                attempt.message = "ERP返回登录提示，正在核对已知的普通提示结构；不会重登、发短信或修改密码。"
+                attempt.message = "原系统返回登录提示，正在核对已知的普通提示结构；不会重登、发短信或修改密码。"
                 attempt.error_code = "LOGIN_NOTICE_PENDING"
                 session.auth_remaining = 0
                 session.auth_urls.clear()
@@ -439,23 +439,23 @@ class PasswordLoginFlows:
                     attempt.error_code = None
                     signal = "authenticated"
                     continue
-                attempt.message = ("ERP提示需要切换登录站点，当前没有自动确认；本次会话暂存，等待核实。"
+                attempt.message = ("原系统提示需要切换登录站点，当前没有自动确认；本次会话暂存，等待核实。"
                                    if signal == "site_mismatch" else
-                                   "ERP登录提示结构尚待核实；已暂存本次会话，不会重复提交密码、发短信或修改密码。")
+                                   "原系统登录提示结构尚待核实；已暂存本次会话，不会重复提交密码、发短信或修改密码。")
                 await asyncio.Future()  # Existing ten-minute attempt timeout/cancel owns cleanup.
             if signal not in {"need_code", "code_rejected", "code_sent", "send_rejected"}:
                 code = "LOGIN_AUTH_REJECTED" if signal == "rejected" else "LOGIN_FLOW_TIMEOUT" if signal == "timeout" else "LOGIN_FLOW_UNADAPTED"
-                raise ConnectorError(code, "ERP登录未通过或要求尚未适配的验证。")
+                raise ConnectorError(code, "原系统登录未通过或要求尚未适配的验证。")
             attempt.status = "need_code"
-            attempt.message = "ERP明确要求短信验证，请本人点击发送并填写手机收到的验证码。"
+            attempt.message = "原系统明确要求短信验证，请本人点击发送并填写手机收到的验证码。"
             if signal == "code_sent":
                 attempt.sent = True
-                attempt.message = "ERP已确认验证码发送，请本人填写收到的短信。"
+                attempt.message = "原系统已确认验证码发送，请本人填写收到的短信。"
             elif signal == "code_rejected":
                 attempt.message = "验证码未通过，请核对后手动重试；未自动重发短信。"
             elif signal == "send_rejected":
                 attempt.sent = False
-                attempt.message = "ERP未确认短信发送，请等待冷却后手动重试。"
+                attempt.message = "原系统未确认短信发送，请等待冷却后手动重试。"
             attempt.busy = False
             kind, code = await attempt.queue.get()
             revision = session.auth_revision

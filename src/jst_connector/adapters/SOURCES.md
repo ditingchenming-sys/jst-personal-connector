@@ -1,5 +1,14 @@
 # 适配来源与边界
 
+## 分销平台（0.4.0）
+
+- 官方统一登录：[account.scm121.com/user/login](https://account.scm121.com/user/login)；业务应用：[sc.scm121.com](https://sc.scm121.com/)。匿名HTML及其精确引用的登录脚本用于核对独立登录表单和请求，不以业务名称建立白名单。
+- 登录页面引用的[account umi.5fac74bd.js](https://assets.sursung.com/prod/account/umi.5fac74bd.js)与[Login chunk](https://assets.sursung.com/prod/account/p__Account__Login.69f4a2fc.async.js)声明 `gyl.scm121.com/api/auth` 下的账号密码与IDAAS本人短信流程。密码编码交官方表单脚本处理；不在本项目重新猜测加密算法。
+- 同一官方脚本声明 `gyl.scm121.com/api/drp` 为业务前缀。供货侧当前用户为固定 `GET /user/supplier/getUserInfo?supplierType=shop&terminalName=SUPPLIER`，服务器字段 `data.coId/coName/coCompanyUser.uid/userName`；认证回执的令牌只作为比对目标，还须由此服务器接口验证当前会话。
+- ERP官方[首页模块](https://src.erp321.com/epaas-container-new/p__index.fa94585c.async.js)的 `epaas.common.syncScmToken` 调用 `PtRR.c` 并读取 `code=0/act=0/data.details.access_token`；[主容器](https://src.erp321.com/epaas-container-new/umi.a6621ceb.js)的该导出对应 `POST /usercenterapi/SupplyChain/GetRedirectTokenV2`。接续仅由已配对且当前核验的ERP本人会话调用，令牌内部转给新分销上下文；不跨域复制ERP Cookie、不接受模型提供票据。
+- 查询/写入、页面、匿名资产、响应来源和DNS校验均使用固定实例平台策略，认证接口不进入通用业务请求通道。SCM业务头由当前已核验会话重建，不保存模板中的Authorization。
+- 取证为匿名公开HTML/JS与隔离夹具验证，不等于已通过真实员工、多角色或全部分销业务验收。当前固定身份契约以官方sc供货侧为依据，渠道/其他入口须按实际身份来源核对。
+
 本目录为独立实现的聚水潭网页协议适配，不依赖其他项目源码、配置或默认公司。
 
 - 页面与认证流程依据聚水潭公开页面及其引用的官方前端资源。

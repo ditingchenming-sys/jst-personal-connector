@@ -123,7 +123,7 @@ def create_app(service: ConnectorService, *, opener=webbrowser.open) -> FastAPI:
 
     @app.get("/health")
     async def health():
-        return {"ok": True, "version": __version__}
+        return {"ok": True, "version": __version__, "platform": service.platform}
 
     @app.get("/ui", response_class=HTMLResponse)
     async def ui():
@@ -131,6 +131,8 @@ def create_app(service: ConnectorService, *, opener=webbrowser.open) -> FastAPI:
 
     @app.post("/api/{action}")
     async def api(action: str, request: Request):
+        if request.headers.get("x-jst-platform", "erp") != service.platform:
+            raise ConnectorError("platform_mismatch", "调用端配置的平台与此组件不一致，未执行请求。")
         profile = service.authenticate(_bearer(request))
         body = await request.json()
         if not isinstance(body, dict):
@@ -153,8 +155,10 @@ def create_app(service: ConnectorService, *, opener=webbrowser.open) -> FastAPI:
         if action == "status":
             return await service.status(profile)
         if action == "login-options":
-            from .adapters.login import LOGIN_TERMS
-            return {"ok": True, "terms": LOGIN_TERMS}
+            return service.login_options(profile)
+        if action == "login-from-erp":
+            from .erp_sso import connect_from_erp
+            return await connect_from_erp(service, profile)
         if action == "identity-evidence":
             from .identity_probe import inspect_identity_sources
             return {"ok": True, "evidence": await inspect_identity_sources(service.browser, profile)}
@@ -187,19 +191,19 @@ def create_app(service: ConnectorService, *, opener=webbrowser.open) -> FastAPI:
     return app
 
 
-def serve(root: Path, *, port: int = 0):
+def serve(root: Path, *, port: int = 0, platform="erp"):
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         with FileLock(str(root / ".agent-process.lock"), timeout=0, mode=0o600):
-            _serve_locked(root, port=port)
+            _serve_locked(root, port=port, platform=platform)
     except Timeout:
         raise ConnectorError("agent_already_running", "此资料目录的组件已经运行，不允许启动第二个实例。") from None
 
 
-def _serve_locked(root: Path, *, port: int):
+def _serve_locked(root: Path, *, port: int, platform="erp"):
     root = Path(root)
-    service = ConnectorService(root)
+    service = ConnectorService(root, platform=platform)
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.bind(("127.0.0.1", port))
     listener.listen(128)
@@ -207,7 +211,7 @@ def _serve_locked(root: Path, *, port: int):
     nonce = secrets.token_urlsafe(16)
     state_path = root / "agent.json"
     _atomic_write(state_path, json.dumps({"url": f"http://127.0.0.1:{actual_port}", "instance": nonce,
-                                       "started_at": time.time()}, ensure_ascii=False).encode())
+                                       "platform": service.platform, "started_at": time.time()}, ensure_ascii=False).encode())
     server = uvicorn.Server(uvicorn.Config(create_app(service), log_level="critical", access_log=False))
     try:
         server.run(sockets=[listener])

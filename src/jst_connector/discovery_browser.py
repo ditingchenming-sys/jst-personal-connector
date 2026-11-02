@@ -23,6 +23,7 @@ from .adapters.login import ENTRY_URL
 from .browser import ERP_HOSTS, approved_request, safe_url
 from .errors import ConnectorError
 from .interface_registry import _AUTH_PATH, _operation_kind
+from .platform_policy import get_policy
 
 _ASSET_HOSTS = {"src.erp321.com", "cdn.erp321.cn", "cdn-static.erp321.cn"}
 _ASSET_SUFFIX = re.compile(r"\.(js|css|png|jpe?g|gif|svg|ico|woff2?|ttf)$", re.IGNORECASE)
@@ -153,8 +154,9 @@ def _safe_headers(headers):
     return result
 
 
-async def _public_destination(url):
-    if not (_erp_url(url) or _asset_url(url)):
+async def _public_destination(url, *, policy=None):
+    allowed = (policy.business_url(url) or policy.asset_url(url)) if policy is not None else (_erp_url(url) or _asset_url(url))
+    if not allowed:
         raise _error(message="目标不属于固定官方HTTPS域名，已阻断。",
                      details={"stage": "dns_policy", "dns_policy": "host_not_allowed"})
     try:
@@ -173,14 +175,15 @@ async def _public_destination(url):
 
 
 class _References(HTMLParser):
-    def __init__(self, base):
+    def __init__(self, base, page_allowed=None):
         super().__init__()
         self.base, self.pages = base, set()
+        self.page_allowed = page_allowed or _page_url
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         target = urljoin(self.base, attrs.get("src" if tag == "iframe" else "href", ""))
-        if tag in {"iframe", "a"} and _page_url(target):
+        if tag in {"iframe", "a"} and self.page_allowed(target):
             self.pages.add(target)
 
 
@@ -205,9 +208,28 @@ class _Discovery:
 class DiscoveryBrowser:
     def __init__(self, browser, *, anonymous_fetch=None):
         self.browser = browser
+        self.site_policy = getattr(browser, "site_policy", None) or get_policy(getattr(browser, "platform", "erp"))
         self._discoveries = {}
         self._anonymous_fetch = anonymous_fetch or self._fetch_public
         browser.add_profile_cleanup(self.close_profile)
+
+    def _business_url(self, url):
+        return _erp_url(url) if self.site_policy.platform == "erp" else self.site_policy.business_url(url)
+
+    def _page_url(self, url):
+        return _page_url(url) if self.site_policy.platform == "erp" else self.site_policy.page_url(url)
+
+    def _asset_url(self, url):
+        return _asset_url(url) if self.site_policy.platform == "erp" else self.site_policy.asset_url(url)
+
+    @property
+    def _navigation(self):
+        return _NAVIGATION if self.site_policy.platform == "erp" else self.site_policy.navigation_urls
+
+    async def _destination(self, url):
+        if self.site_policy.platform == "erp":
+            return await _public_destination(url)
+        return await _public_destination(url, policy=self.site_policy)
 
     def _check(self, discovery):
         session = self.browser._sessions.get(discovery.profile)
@@ -232,14 +254,15 @@ class DiscoveryBrowser:
                 await self.close_profile(profile)
             raise
 
-    async def start(self, profile, url=ENTRY_URL, *, entry_approved=False, expected_binding=None):
-        if not _page_url(url) or (url not in _NAVIGATION and entry_approved is not True):
+    async def start(self, profile, url=None, *, entry_approved=False, expected_binding=None):
+        url = self.site_policy.entry_url if url is None else url
+        if not self._page_url(url) or (url not in self._navigation and entry_approved is not True):
             raise _error("DISCOVERY_ENTRY_APPROVAL_REQUIRED", "该页面入口尚未批准，请先由本人在管理页确认精确入口。")
         try:
             async with self.browser.verified_scope(profile) as identity:
                 session = self.browser._sessions[profile]
                 if ((expected_binding is not None and expected_binding != session.vault_binding)
-                        or (url not in _NAVIGATION and not expected_binding)):
+                        or (url not in self._navigation and not expected_binding)):
                     raise _error("DISCOVERY_SESSION_CHANGED", "入口审批对应的账号会话已变化，请重新批准。")
                 await self.close_profile(profile)
                 state = await session.context.storage_state()
@@ -319,12 +342,11 @@ class DiscoveryBrowser:
             "source": {"page_url": safe_url(request.frame.url), "discovery_id": discovery.discovery_id,
                        "resource_type": request.resource_type, "blocked": blocked, "credential_fields": removed},
             "identity_bindings": bindings, "json_fields": json_fields}
-        discovery.requests[request_id]["_scope"] = {"profile": discovery.profile, "identity": dict(discovery.identity),
+        discovery.requests[request_id]["_scope"] = {"profile": discovery.profile, "platform": self.site_policy.platform, "identity": dict(discovery.identity),
                                                     "session_binding": discovery.persisted_binding}
 
-    @staticmethod
-    async def _fetch_public(url):
-        await _public_destination(url)
+    async def _fetch_public(self, url):
+        await self._destination(url)
         async with (httpx.AsyncClient(trust_env=False, follow_redirects=False, timeout=15) as client,
                     client.stream("GET", url, headers={"Accept": "*/*"}) as response):
                 if response.status_code != 200 or str(response.url) != url:
@@ -338,7 +360,7 @@ class DiscoveryBrowser:
         return {"status": response.status_code, "url": str(response.url), "body": bytes(body), "content_type": content_type}
 
     async def _asset(self, discovery, url):
-        if not _asset_url(url):
+        if not self._asset_url(url):
             raise _error(message="该地址不是已核实公共静态资源域及文件。")
         if url in discovery.sources:
             return discovery.sources[url]
@@ -366,7 +388,7 @@ class DiscoveryBrowser:
         phase = "scope_check"
         try:
             self._check(discovery)
-            if request.method == "GET" and _asset_url(request.url):
+            if request.method == "GET" and self._asset_url(request.url):
                 phase = "anonymous_asset"
                 source = await self._asset(discovery, request.url)
                 self._check(discovery)
@@ -374,9 +396,9 @@ class DiscoveryBrowser:
                                     headers={"Access-Control-Allow-Origin": "*"})
             elif request.method == "GET" and request.resource_type == "document" and request.url in discovery.pages:
                 phase = "document_policy"
-                if not _page_url(request.url):
+                if not self._page_url(request.url):
                     raise _error(message="认证、登出或已知写动作不能作为探索页面。")
-                await _public_destination(request.url)
+                await self._destination(request.url)
                 self._check(discovery)
                 phase = "document_fetch"
                 response = await route.fetch(max_redirects=0, timeout=30000)
@@ -388,7 +410,7 @@ class DiscoveryBrowser:
                 body = await response.body()
                 if len(body) > 2000000:
                     raise _error(message="探索页面超出本次范围。")
-                parser = _References(request.url)
+                parser = _References(request.url, self._page_url)
                 parser.feed(body.decode("utf-8", errors="replace"))
                 discovery.pages.update(parser.pages)
                 self._check(discovery)
@@ -401,7 +423,7 @@ class DiscoveryBrowser:
                 except (PlaywrightError, ValueError):
                     if request.post_data:
                         payload = {key: values[0] for key, values in parse_qs(request.post_data).items()}
-                approved = approved_request(request.method, request.url, payload)
+                approved = self.site_policy.platform == "erp" and approved_request(request.method, request.url, payload)
                 self._capture(discovery, request, blocked=not approved)
                 if approved:
                     result = await self.browser.request(discovery.profile, request.method, request.url, payload)
@@ -411,7 +433,7 @@ class DiscoveryBrowser:
                     await route.abort("blockedbyclient")
         except (ConnectorError, PlaywrightError, OSError, httpx.HTTPError) as error:
             diagnostic = {"stage": phase,
-                          "url": safe_url(request.url) if _erp_url(request.url) or _asset_url(request.url) else "[未审核地址]",
+                          "url": safe_url(request.url) if self._business_url(request.url) or self._asset_url(request.url) else "[未审核地址]",
                           "failure": "policy_rejected" if isinstance(error, ConnectorError) else "transport_failed"}
             if isinstance(error, ConnectorError) and error.details.get("stage") == "dns_policy":
                 diagnostic.update(stage="dns_policy", dns_policy=error.details["dns_policy"])
@@ -430,7 +452,7 @@ class DiscoveryBrowser:
         await asyncio.gather(*(handle.dispose() for handle in old_handles), return_exceptions=True)
         frames = []
         for frame in discovery.page.frames[:12]:
-            if not _page_url(frame.url):
+            if not self._page_url(frame.url):
                 continue
             elements = []
             locator = frame.locator("a,button,input,select,textarea,[role=button],[role=menuitem],[role=tab],[onclick],iframe,script[src]")
@@ -459,7 +481,7 @@ class DiscoveryBrowser:
                 if tag == "select":
                     item["options"] = [_text(await option.text_content() or "", 100)
                                        for option in (await element.query_selector_all("option"))[:50]]
-                if tag in {"a", "iframe"} and _page_url(target):
+                if tag in {"a", "iframe"} and self._page_url(target):
                     item["url"] = target
                     discovery.pages.add(target)
                 elements.append(item)
@@ -511,7 +533,7 @@ class DiscoveryBrowser:
                 raise _error("DISCOVERY_REF_EXPIRED", "页面结构已变化，请重新读取页面。")
             try:
                 if action == "navigate" or (action == "click" and metadata["tag"] == "a"):
-                    if metadata["tag"] not in {"a", "iframe"} or not _page_url(metadata["target"]):
+                    if metadata["tag"] not in {"a", "iframe"} or not self._page_url(metadata["target"]):
                         raise _error(message="该引用不是已观察到的无参数ERP页面入口。")
                     discovery.pages.add(metadata["target"])
                     await discovery.page.goto(metadata["target"], wait_until="domcontentloaded", timeout=30000)
@@ -549,7 +571,7 @@ class DiscoveryBrowser:
         if not isinstance(descriptor, dict):
             raise _error(message="接口描述格式无效。")
         url, method = descriptor.get("url"), descriptor.get("method")
-        if not _erp_url(url) or urlsplit(url).query or method not in {"GET", "POST"}:
+        if not self._business_url(url) or urlsplit(url).query or method not in {"GET", "POST"}:
             raise _error(message="已批准接口的地址或方法无效。")
         if descriptor.get("source", {}).get("credential_fields"):
             raise _error("DISCOVERY_ENCODING_UNADAPTED", "候选包含未适配认证或隐藏页面状态，需专门适配，不能沿用旧值。")
@@ -557,11 +579,12 @@ class DiscoveryBrowser:
         if not isinstance(headers, dict) or _safe_headers(headers) != headers:
             raise _error(message="接口包含未审核请求头，已阻断。")
         source = descriptor.get("source", {}).get("page_url", "")
-        headers["Referer"] = source if _page_url(source) else ENTRY_URL
+        headers["Referer"] = source if self._page_url(source) else self.site_policy.entry_url
         async with self.browser.verified_scope(profile) as identity:
             session = self.browser._sessions[profile]
             expected = descriptor.get("_scope")
             if (not isinstance(expected, dict) or expected.get("profile") != profile
+                    or expected.get("platform", "erp") != self.site_policy.platform
                     or expected.get("identity") != identity or expected.get("session_binding") != session.vault_binding):
                 raise _error("DISCOVERY_SESSION_CHANGED", "接口批准时的账号范围已变化，请重新审核。")
             bindings, removed = [], []
@@ -581,6 +604,8 @@ class DiscoveryBrowser:
                 if kind != binding.get("kind"):
                     raise _error(message="身份槽不能修改业务参数。")
                 if kind == "u_cid_ajax":
+                    if self.site_policy.csrf_cookie != "u_cid":
+                        raise _error("DISCOVERY_ENCODING_UNADAPTED", "当前平台未核实该认证字段的重建方式，不能套用ERP令牌。")
                     cookies = await session.context.cookies([url])
                     tokens = [cookie["value"] for cookie in cookies if cookie["name"] == "u_cid"]
                     if len(tokens) != 1:
@@ -601,7 +626,19 @@ class DiscoveryBrowser:
                 descriptor["body"]["__CALLBACKPARAM"] = json.dumps(descriptor["body"]["__CALLBACKPARAM"], ensure_ascii=False)
             query = descriptor.get("query", {})
             target = url + ("?" + urlencode(query, doseq=True) if query else "")
-            await _public_destination(target)
+            await self._destination(target)
+            if self.site_policy.platform != "erp":
+                prepare_headers = getattr(self.browser, "business_headers", None)
+                if not callable(prepare_headers):
+                    raise _error("DISCOVERY_ENCODING_UNADAPTED", "当前平台业务授权头尚未适配，未发出请求。")
+                trusted_headers = await prepare_headers(session, target)
+                if (not isinstance(trusted_headers, dict)
+                        or any(not isinstance(key, str) or key.casefold() not in {"authorization", "app-version", "source", "appcode"}
+                               or not isinstance(value, str) or not value or len(value) > 16384 or "\r" in value or "\n" in value
+                               for key, value in trusted_headers.items())
+                        or not any(key.casefold() == "authorization" for key in trusted_headers)):
+                    raise _error("DISCOVERY_ENCODING_UNADAPTED", "当前平台业务授权头未通过核验，未发出请求。")
+                headers.update(trusted_headers)
             self.browser._assert_scope(profile, session, identity)
             options = {"method": method, "headers": headers, "max_redirects": 0, "timeout": 30000}
             encoding = descriptor.get("encoding")

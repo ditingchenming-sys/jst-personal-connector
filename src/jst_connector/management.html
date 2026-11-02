@@ -39,6 +39,7 @@ label{display:flex;gap:8px;align-items:center}.field{display:flex;flex-direction
 <section class="card login-card" id="login-area"><div class="login-heading"><h2>账号密码登录</h2><span>本人账号</span></div><p class="login-caption">优先复用有效登录；只有聚水潭要求时，才需短信验证。</p>
 <p id="authorization-notice" class="authorization-notice" role="alert" hidden>此管理页面没有有效授权，暂不能填写或操作。请通过连接器重新打开当前调用端的管理页面。</p>
 <form id="account-form" autocomplete="off">
+<button id="erp-connect" type="button" class="secondary" hidden>使用已登录的ERP接续分销</button>
 <label class="field" for="username"><span>登录账号</span><input id="username" name="username" type="text" aria-label="聚水潭账号" autocomplete="username" placeholder="邮箱地址 / 手机号码" maxlength="128" required></label>
 <label class="field" for="password"><span>登录密码</span><input id="password" name="password" type="password" aria-label="密码" autocomplete="off" placeholder="请输入登录密码" maxlength="1024" required></label>
 <label class="check remember-option"><input id="remember" type="checkbox"><span>记住密码 <span class="check-detail">加密保存在本机，退出账号时清除</span></span></label>
@@ -131,11 +132,12 @@ async function refreshConnection(){const epoch=loginEpoch,result=await api('stat
 async function refresh(){await refreshConnection();await pollLogin();}
 byId('refresh').onclick=()=>run(refresh);
 byId('login').onclick=()=>run(pollLogin);
+byId('erp-connect').onclick=()=>run(async()=>{const epoch=++loginEpoch;byId('erp-connect').disabled=true;message('正在核验已配对的ERP并接续分销…');try{const result=await api('login-from-erp');if(epoch===loginEpoch)showLogin(result.login);}finally{byId('erp-connect').disabled=false;}});
 byId('account-form').onsubmit=event=>{event.preventDefault();run(async()=>{const epoch=++loginEpoch;byId('password-submit').disabled=true;const password=byId('password').value;byId('password').value='';try{const result=await api('login-password',{username:byId('username').value.trim(),password,remember:byId('remember').checked,terms_accepted:byId('terms').checked});if(epoch===loginEpoch)showLogin(result.login);}catch(error){if(epoch===loginEpoch)throw error;}finally{if(epoch===loginEpoch)byId('password-submit').disabled=!termsReady||byId('account-form').hidden;}});};
 byId('send-code').onclick=()=>run(async()=>{const epoch=++loginEpoch;byId('send-code').disabled=true;try{const result=await api('login-send-code');if(epoch===loginEpoch)showLogin(result.login);}catch(error){if(epoch===loginEpoch){await pollLogin();throw error;}}});
 byId('code-form').onsubmit=event=>{event.preventDefault();run(async()=>{const epoch=++loginEpoch,code=byId('code').value;byId('code').value='';byId('submit-code').disabled=true;try{const result=await api('login-submit-code',{code});if(epoch===loginEpoch)showLogin(result.login);}catch(error){if(epoch===loginEpoch){await pollLogin();throw error;}}});};
 byId('cancel-login').onclick=()=>run(async()=>{const epoch=++loginEpoch;const result=await api('login-cancel');if(epoch===loginEpoch)showLogin(result.login);});
 byId('logout').onclick=()=>run(async()=>{if(!confirm('退出当前调用端账号并清除其登录资料？'))return;const epoch=++loginEpoch;await api('logout');if(epoch!==loginEpoch)return;stopPolling();byId('password').value='';byId('code').value='';byId('username').value='';byId('remember').checked=false;await refresh();});
-if(authorized)run(async()=>{const result=await api('login-options');for(const [id,key]of [['agreement','agreement_url'],['privacy','privacy_url']]){const target=new URL(result.terms[key]);if(target.protocol!=='https:')throw Error('登录协议地址无效，请更新组件。');byId(id).href=target.href;}termsReady=true;await refresh();});
+if(authorized)run(async()=>{const result=await api('login-options');if(result.platform_name){document.title=result.platform_name+'连接授权';document.querySelector('.brand-name').textContent=result.platform_name+'连接器';}byId('erp-connect').hidden=!result.erp_sso_available;for(const [id,key]of [['agreement','agreement_url'],['privacy','privacy_url']]){const target=new URL(result.terms[key]);if(target.protocol!=='https:')throw Error('登录协议地址无效，请更新组件。');byId(id).href=target.href;}termsReady=true;await refresh();});
 else message('此管理页面没有有效授权，请通过连接器重新打开。');
 </script></body></html>

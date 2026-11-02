@@ -140,6 +140,16 @@ class EmployeeStore:
             self._save(conn, employee)
             self._revoke_sessions(conn, username)
 
+    def connection_profile(self, username, client):
+        """本机管理员配对使用；不注册为远程API，不返回访问令牌。"""
+        with self._connection() as conn:
+            employee = self._employee(conn, _username(username))
+            connection = next((item for item in (employee or {}).get("connections", [])
+                               if item["client"] == profile_name(client)), None)
+            if not employee or not employee["enabled"] or connection is None:
+                raise ConnectorError("employee_not_found", "找不到已启用员工的指定调用端。")
+            return connection["profile"]
+
     def _revoke_sessions(self, conn, username):
         for row in conn.execute("SELECT id,encrypted FROM browser_sessions").fetchall():
             if self.vault.unseal(row["encrypted"])["username"] == username:
@@ -288,7 +298,7 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
 
     @app.get("/health")
     async def health():
-        return {"ok": True, "version": __version__, "mode": "remote"}
+        return {"ok": True, "version": __version__, "mode": "remote", "platform": service.platform}
 
     @app.get("/login", response_class=HTMLResponse)
     async def login_page():
@@ -330,8 +340,10 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
         if action == "status":
             return await service.status(profile)
         if action == "login-options":
-            from .adapters.login import LOGIN_TERMS
-            return {"ok": True, "terms": LOGIN_TERMS}
+            return service.login_options(profile)
+        if action == "login-from-erp":
+            from .erp_sso import connect_from_erp
+            return await connect_from_erp(service, profile)
         if action == "login-password":
             result = await service.browser.password_login(profile, body.get("username", ""), body.get("password", ""),
                                                           remember=body.get("remember") is True,
@@ -372,6 +384,8 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
 
     @app.post("/api/{action}")
     async def api(action: str, request: Request):
+        if request.headers.get("x-jst-platform", "erp") != service.platform:
+            raise ConnectorError("platform_mismatch", "调用端配置的平台与此组件不一致，未执行请求。")
         header = request.headers.get("authorization", "")
         identity = employees.bearer(header[7:] if header.startswith("Bearer ") else "")
         body = await body_json(request)
@@ -399,7 +413,7 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
     return app
 
 
-def serve_remote(root: Path, *, origin: str, port=8765):
+def serve_remote(root: Path, *, origin: str, port=8765, platform="erp"):
     origin = public_origin(origin)
     if type(port) is not int or not 1 <= port <= 65535:
         raise ConnectorError("invalid_port", "远程服务端口须为1至65535。")
@@ -407,7 +421,7 @@ def serve_remote(root: Path, *, origin: str, port=8765):
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         with FileLock(str(root / ".agent-process.lock"), timeout=0, mode=0o600):
-            service = ConnectorService(root)
+            service = ConnectorService(root, platform=platform)
             uvicorn.run(create_remote_app(service, origin), host="127.0.0.1", port=port,
                         proxy_headers=False, access_log=False, log_level="warning")
     except Timeout:
