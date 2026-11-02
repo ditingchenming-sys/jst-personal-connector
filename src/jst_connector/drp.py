@@ -31,11 +31,29 @@ PASSWORD_URL = AUTH_BASE + "/open/v2/login/gyl/accountLogin"
 ENCRYPT_KEY_URL = AUTH_BASE + "/open/getEncryptKey"
 SEND_CODE_URL = AUTH_BASE + "/open/v2/login/gyl/getIdaasVerificationCode"
 SUBMIT_CODE_URL = AUTH_BASE + "/open/v2/login/gyl/idaasVerificationLogin"
+_AUTH_ORIGINS = frozenset({"https://gyl.scm121.com", "https://account.scm121.com"})
+_AUTH_ENDPOINTS = (PASSWORD_URL, ENCRYPT_KEY_URL, SEND_CODE_URL, SUBMIT_CODE_URL)
+_AUTH_CANONICAL = {url.replace("https://gyl.scm121.com", origin, 1): url
+                   for origin in _AUTH_ORIGINS for url in _AUTH_ENDPOINTS}
 USER_INFO_URL = "https://gyl.scm121.com/api/drp/user/supplier/getUserInfo?supplierType=shop&terminalName=SUPPLIER"
 TOKEN_COOKIE = "DISTRYBUTION_TOKEN"
 ERP_TOKEN_URL = "https://api.erp321.com/usercenterapi/SupplyChain/GetRedirectTokenV2"
 _TOKEN = re.compile(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
 _MAX_BODY = 262144
+
+
+def _canonical_auth_url(value):
+    """Only the four observed endpoints may use either official auth proxy."""
+    try:
+        parts = urlsplit(value)
+        if (parts.scheme != "https" or "https://" + parts.netloc not in _AUTH_ORIGINS
+                or parts.netloc != parts.hostname or parts.port is not None
+                or parts.username or parts.password or parts.fragment or "#" in value or "\\" in value
+                or any(character.isspace() or ord(character) < 32 for character in value)):
+            return None
+        return _AUTH_CANONICAL.get("https://" + parts.netloc + parts.path)
+    except (ValueError, TypeError):
+        return None
 
 # These are actually requested by the anonymous account login build. They have no
 # SCM cookies and never grant business requests or authentication redirects.
@@ -99,9 +117,9 @@ class DrpIdentityVerifier:
             sources = session.server_identity_sources
             provenance = all(isinstance(sources.get(key), dict)
                              and (sources[key].get("via"), sources[key].get("response_url"), sources[key].get("method"))
-                             in {("authentication-response", PASSWORD_URL, "POST"),
-                                 ("authentication-response", SUBMIT_CODE_URL, "POST"),
-                                 ("trusted-erp-exchange", ERP_TOKEN_URL, "POST")}
+                             in ({("authentication-response", url, "POST") for url, canonical in _AUTH_CANONICAL.items()
+                                  if canonical in {PASSWORD_URL, SUBMIT_CODE_URL}}
+                                 | {("trusted-erp-exchange", ERP_TOKEN_URL, "POST")})
                              for key in ("company_id", "user_id"))
             if (not session.controlled_login or not session.server_passport_receipted
                     or session.server_identity_conflicted or not provenance
@@ -297,7 +315,8 @@ class DrpBrowserManager(BrowserManager):
 
     @staticmethod
     def _grant_login_action(session, action):
-        session.auth_urls = {{"password": PASSWORD_URL, "send": SEND_CODE_URL, "code": SUBMIT_CODE_URL}[action]}
+        endpoint = {"password": PASSWORD_URL, "send": SEND_CODE_URL, "code": SUBMIT_CODE_URL}[action]
+        session.auth_urls = {url for url, canonical in _AUTH_CANONICAL.items() if canonical == endpoint}
         session.auth_remaining = 1
         session.drp_key_remaining = 1 if action == "password" else 0
         session.auth_deadline = time.monotonic() + 30
@@ -307,7 +326,9 @@ class DrpBrowserManager(BrowserManager):
                 or time.monotonic() >= session.auth_deadline):
             return
         base = safe_url(request.url)
-        if (base, request.method) not in {(PASSWORD_URL, "POST"), (SEND_CODE_URL, "GET"), (SUBMIT_CODE_URL, "POST")}:
+        canonical = _canonical_auth_url(request.url)
+        if ((canonical, request.method) not in {(PASSWORD_URL, "POST"), (SEND_CODE_URL, "GET"), (SUBMIT_CODE_URL, "POST")}
+                or (canonical != SEND_CODE_URL and request.url != base)):
             return
         body = await response.body() if response.status == 200 else b""
         try:
@@ -315,12 +336,12 @@ class DrpBrowserManager(BrowserManager):
         except (ValueError, UnicodeError):
             value = None
         success = isinstance(value, dict) and value.get("success") is True
-        signal = "rejected" if base == PASSWORD_URL else "send_rejected" if base == SEND_CODE_URL else "code_rejected"
-        if base == SEND_CODE_URL and success:
+        signal = "rejected" if canonical == PASSWORD_URL else "send_rejected" if canonical == SEND_CODE_URL else "code_rejected"
+        if canonical == SEND_CODE_URL and success:
             signal = "code_sent"
-        elif base == PASSWORD_URL and isinstance(value, dict) and value.get("code") == "20002":
+        elif canonical == PASSWORD_URL and isinstance(value, dict) and value.get("code") == "20002":
             signal = "need_code"
-        elif base == PASSWORD_URL and isinstance(value, dict) and value.get("code") == "20001":
+        elif canonical == PASSWORD_URL and isinstance(value, dict) and value.get("code") == "20001":
             signal = "unsupported"
         elif success:
             data = value.get("data")
@@ -361,25 +382,21 @@ class DrpBrowserManager(BrowserManager):
         try:
             parts = urlsplit(request.url)
             base = safe_url(request.url)
-            # safe_url is a display redactor, not an authorization canonicalizer:
-            # it deliberately omits ports/userinfo and must never grant access.
-            auth_origin = (parts.scheme == "https" and parts.hostname == "gyl.scm121.com"
-                           and parts.netloc == "gyl.scm121.com" and parts.port is None
-                           and not parts.username and not parts.password and not parts.fragment
-                           and "#" not in request.url and "\\" not in request.url
-                           and not any(character.isspace() or ord(character) < 32 for character in request.url))
+            # safe_url only redacts diagnostic URLs. The fixed endpoint mapper
+            # validates the original authority before considering a proxy alias.
+            canonical = _canonical_auth_url(request.url)
         except (ValueError, TypeError):
             await self._abort_route(route)
             return
-        fresh = (auth_origin and session.login and session.controlled_login
+        fresh = (canonical is not None and session.login and session.controlled_login
                  and time.monotonic() < session.auth_deadline)
-        auth = (fresh and base in {PASSWORD_URL, SUBMIT_CODE_URL} and base in session.auth_urls and session.auth_remaining > 0
+        auth = (fresh and canonical in {PASSWORD_URL, SUBMIT_CODE_URL} and base in session.auth_urls and session.auth_remaining > 0
                 and request.url == base and request.method in {"POST", "OPTIONS"})
-        send = (fresh and base == SEND_CODE_URL and base in session.auth_urls and session.auth_remaining > 0
+        send = (fresh and canonical == SEND_CODE_URL and base in session.auth_urls and session.auth_remaining > 0
                 and request.method in {"GET", "OPTIONS"}
                 and set(parse_qs(parts.query, keep_blank_values=True)) <= {"loginName", "fId"}
                 and parse_qs(parts.query).get("loginName") == [getattr(session, "drp_login_name", "")])
-        key = (fresh and base == ENCRYPT_KEY_URL and request.method in {"POST", "OPTIONS"}
+        key = (fresh and canonical == ENCRYPT_KEY_URL and request.method in {"POST", "OPTIONS"}
                and getattr(session, "drp_key_remaining", 0) > 0
                and parse_qs(parts.query) == {"username": [getattr(session, "drp_login_name", "")]})
         initial = request.method == "GET" and request.url in {LOGIN_URL, ENTRY_URL}

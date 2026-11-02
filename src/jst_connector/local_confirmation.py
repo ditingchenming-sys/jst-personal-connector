@@ -20,7 +20,7 @@ class LocalConfirmation:
         self.grants = {}
 
     async def open(self, profile, preview_id, digest, base_url, *, area=None):
-        target = self.service.area_service(area)
+        target = await self.service.prepare_area(profile, area, required=True)
         preview = target.ledger.get_preview(profile, preview_id)
         if preview["status"] != "ready" or preview["digest"] != digest:
             raise ConnectorError("confirmation_invalid", "预览已变化或已确认，请先查询同一操作状态。")
@@ -62,7 +62,7 @@ class LocalConfirmation:
                 raise ConnectorError("invalid_request", "确认请求须为有效的JSON对象。") from None
             if not isinstance(body, dict) or body.get("area", grant["area"]) != grant["area"]:
                 raise ConnectorError("area_mismatch", "确认入口所属板块不匹配，请重新打开原操作确认页。")
-            target = self.service.area_service(grant["area"])
+            target = await self.service.prepare_area(grant["profile"], grant["area"], required=True)
             preview = target.ledger.get_preview(grant["profile"], grant["preview_id"])
             return {"ok": True, "preview": preview, "area": grant["area"]}
 
@@ -73,6 +73,7 @@ class LocalConfirmation:
             if (not isinstance(body, dict) or body.get("digest") != grant["digest"]
                     or body.get("area", grant["area"]) != grant["area"]):
                 raise ConnectorError("digest_mismatch", "确认内容与原预览不一致，请重新核对。")
-            result = self.service.area_service(grant["area"]).approve(grant["profile"], grant["preview_id"], grant["digest"])
+            target = await self.service.prepare_area(grant["profile"], grant["area"], required=True)
+            result = target.approve(grant["profile"], grant["preview_id"], grant["digest"])
             self.grants.pop(token, None)
             return result

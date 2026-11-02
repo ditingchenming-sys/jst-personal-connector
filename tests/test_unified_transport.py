@@ -7,6 +7,7 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from jst_connector.agent import create_app
+from jst_connector.errors import ConnectorError
 from jst_connector.remote import EmployeeStore, create_remote_app
 from jst_connector.service import ConnectorService
 
@@ -24,6 +25,12 @@ class AreaBrowser:
 
     async def login_status(self, profile):
         return {"status": "connected" if self.vault.load_session(profile) else "disconnected", "message": self.area}
+
+    async def identity(self, profile):
+        saved = self.vault.load_session(profile)
+        if saved is None:
+            raise ConnectorError("LOGIN_REQUIRED", "夹具尚未连接。")
+        return saved["identity"]
 
     async def password_login(self, profile, username, password, remember, terms_accepted):
         self.actions.append(("password", profile, username))
@@ -241,12 +248,13 @@ def test_default_login_options_does_not_create_drp_or_trigger_sso(tmp_path, monk
         assert root._area_children == {} and not (tmp_path / "modules" / "drp").exists()
 
 
-def test_one_local_login_page_switches_area_and_uses_same_actor_erp_connection(unified, monkeypatch):
+def test_one_local_login_page_switches_area_and_automatically_uses_same_actor_erp(unified, monkeypatch):
     from playwright.sync_api import expect, sync_playwright
     root, child = unified
     child.vault.clear_session("codex")
     requests, opened, connections, errors = [], [], [], []
-    async def connect(profile, area="drp"):
+    async def connect(profile, area="drp", *, _automatic=False):
+        assert _automatic is True
         connections.append((profile, area))
         child.vault.save_session(profile, {}, {"company_id": "drp-company", "user_id": "drp-person"})
         return {"ok": True, "login": {"status": "connected"}}
@@ -274,13 +282,12 @@ def test_one_local_login_page_switches_area_and_uses_same_actor_erp_connection(u
         page.screenshot(path=str(screenshots / "unified-connector-erp.png"), full_page=True)
         assert connections == []
         page.locator("#business-area").select_option("drp")
-        expect(page.locator("#erp-connect")).to_be_visible()
-        page.locator("#erp-connect").click()
         expect(page.locator("#connected-area")).to_be_visible()
+        expect(page.locator("#erp-connect")).to_be_hidden()
         page.screenshot(path=str(screenshots / "unified-connector-drp.png"), full_page=True)
         assert connections == [("codex", "drp")]
         assert all(body.get("profile") == "codex" for _path, body in requests)
-        assert all(body["area"] == "drp" for path, body in requests if path.endswith("login-from-erp"))
+        assert not any(path.endswith("login-from-erp") for path, _body in requests)
         assert "分销连接器" not in page.locator(".brand-name").inner_text()
         assert not errors
         browser.close()
@@ -309,6 +316,8 @@ def test_remote_browser_switch_stale_logout_does_not_clear_new_area_inputs(unifi
                 body = request.post_data_json
                 actions.append((urlsplit(request.url).path, body))
                 if request.url.endswith("/portal/connection/logout"):
+                    # The server has finished logout; only its response arrives late.
+                    root.vault.clear_session(actor)
                     delayed.append(route)
                     return
             response = client.request(request.method, request.url, headers=request.headers, content=request.post_data)
@@ -337,14 +346,14 @@ def test_remote_browser_switch_stale_logout_does_not_clear_new_area_inputs(unifi
         browser.close()
 
 
-@pytest.mark.parametrize("late_action", ["login-password", "login-from-erp"])
-def test_remote_late_password_or_sso_error_does_not_replace_other_area_state(unified, late_action):
+@pytest.mark.parametrize("late_action", ["login-password", "auto-status"])
+def test_remote_late_password_or_auto_connection_error_does_not_replace_other_area_state(unified, late_action):
     from playwright.sync_api import expect, sync_playwright
     root, _child = unified
     employees = EmployeeStore(root.root, root.vault)
     alice = employees.create_employee("alice", PASSWORD)
     actor = employees.bearer(alice["access_token"])["profile"]
-    if late_action == "login-from-erp":
+    if late_action == "auto-status":
         root.vault.save_session(actor, {}, {"company_id": "erp-alice", "user_id": "alice"})
     delayed = []
     with TestClient(create_remote_app(root, ORIGIN, employees=employees), base_url=ORIGIN) as client, sync_playwright() as playwright:
@@ -357,7 +366,17 @@ def test_remote_late_password_or_sso_error_does_not_replace_other_area_state(uni
         def route_request(route):
             request = route.request
             assert request.url.startswith(ORIGIN + "/")
-            if request.url.endswith("/portal/connection/" + late_action):
+            body = request.post_data_json if request.method == "POST" else {}
+            if (late_action == "auto-status" and body.get("area") == "drp"
+                    and request.url.endswith("/portal/connection/login-options")):
+                options = root.area_login_options(actor, "drp")
+                options["auto_connection"] = {"status": "connecting", "erp_available": True,
+                    "can_password_login": False, "retry_after_seconds": 0, "message": "正在自动连接分销。"}
+                route.fulfill(json=options)
+                return
+            if (late_action == "auto-status" and body.get("area") == "drp"
+                    and request.url.endswith("/portal/connection/status")
+                    or late_action == "login-password" and request.url.endswith("/portal/connection/login-password")):
                 delayed.append(route)
                 return
             response = client.request(request.method, request.url, headers=request.headers, content=request.post_data)
@@ -366,10 +385,10 @@ def test_remote_late_password_or_sso_error_does_not_replace_other_area_state(uni
         page = context.new_page()
         page.goto(ORIGIN + "/login?connection=" + alice["connection_id"])
         expect(page.locator("#business-area")).to_be_enabled()
-        if late_action == "login-from-erp":
+        if late_action == "auto-status":
             page.locator("#business-area").select_option("drp")
-            expect(page.locator("#erp-connect")).to_be_visible()
-            page.locator("#erp-connect").click()
+            expect(page.locator("#business-area")).to_be_enabled()
+            assert delayed
             destination = "erp"
         else:
             expect(page.locator("#jst-form")).to_be_visible()

@@ -419,9 +419,14 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
         body = await body_json(request)
         target = service.area_service(body.get("area"))
         if action == "status":
-            return await target.status(profile)
+            from .agent import dispatch_action
+            return await dispatch_action(service, profile, "status", {"area": body.get("area")})
         if action == "login-options":
-            return service.area_login_options(profile, body.get("area"))
+            await service.prepare_area(profile, body.get("area"))
+            result = service.area_login_options(profile, body.get("area"))
+            if service.platform == "erp" and target.platform == "drp":
+                result["auto_connection"] = service.auto_connection(profile, body.get("area"))
+            return result
         if action == "login-from-erp":
             return await service.connect_area_from_erp(profile, area=target.platform)
         if action == "login-password":
@@ -454,14 +459,15 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
     async def operation(request: Request):
         session = employee_session(request, csrf=True)
         body = await body_json(request)
-        target = service.area_service(body.get("area"))
+        target = await service.prepare_area(session["profile"], body.get("area"), required=True)
         return {"ok": True, "preview": target.ledger.get_preview(session["profile"], body.get("preview_id", "")), "area": target.platform}
 
     @app.post("/portal/approve")
     async def approve(request: Request):
         session = employee_session(request, csrf=True)
         body = await body_json(request)
-        return service.area_service(body.get("area")).approve(session["profile"], body.get("preview_id", ""), body.get("digest", ""))
+        target = await service.prepare_area(session["profile"], body.get("area"), required=True)
+        return target.approve(session["profile"], body.get("preview_id", ""), body.get("digest", ""))
 
     @app.post("/api/{action}")
     async def api(action: str, request: Request):
@@ -478,6 +484,7 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
                 url += "&area=drp"
             return {"ok": True, "url": url, "message": "请在自己的浏览器打开此网址，完成本人身份授权后连接聚水潭。完成后可关闭。"}
         if action == "open-confirmation":
+            target = await service.prepare_area(profile, body.get("area"), required=True)
             record = target.ledger.get_preview(profile, body.get("preview_id", ""))
             if record["status"] != "ready" or record["digest"] != body.get("digest"):
                 raise ConnectorError("confirmation_invalid", "预览已变化或已确认，请先查询同一操作状态。")
@@ -491,7 +498,9 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
         handler = dispatcher
         if handler is None:
             from .agent import dispatch_action
-            handler = dispatch_action
+            return await dispatch_action(service, profile, action, body, manager_opener=None, base_url=origin)
+        target = service.area_service(body.get("area")) if action == "network" else await service.prepare_area(
+            profile, body.get("area"), required=action not in {"status", "catalog"})
         return await handler(target, profile, action, body, manager_opener=None, base_url=origin)
 
     return app

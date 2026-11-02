@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import sqlite3
 import threading
+import time
 from pathlib import Path
 
 from .browser import BrowserManager
@@ -33,6 +35,9 @@ class ConnectorService:
         self._writes = None
         self._area_children = {}
         self._area_lock = threading.RLock()
+        self._auto_drp_locks = {}
+        self._auto_drp_states = {}
+        self._auto_drp_cooldown = 15
 
     def area_service(self, area=None):
         """Select this actor's business area without changing authorization.
@@ -66,7 +71,146 @@ class ConnectorService:
         return {**result, "area": target.platform, "default_area": self.platform,
                 "areas": ["erp", "drp"] if self.platform == "erp" else ["drp"]}
 
-    async def connect_area_from_erp(self, profile, area="drp"):
+    def _auto_receipt(self, target, profile):
+        path = target.root / "sso-links.sqlite3"
+        if not path.exists():
+            return None
+        with sqlite3.connect(path, timeout=30) as conn:
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='auto_area_bindings'").fetchone():
+                return None
+            row = conn.execute("SELECT encrypted FROM auto_area_bindings WHERE profile=?", (profile,)).fetchone()
+        record = target.vault.unseal(row[0]) if row else None
+        if record is not None and (record.get("profile") != profile or record.get("source_root") != str(self.root.resolve())
+                                   or record.get("area") != "drp"):
+            raise ConnectorError("auto_drp_binding_invalid", "自动接续来源记录无法核实，请重新核对本人的连接。")
+        return record
+
+    def _store_auto_receipt(self, target, profile, source_binding, target_binding):
+        # Both bindings come from the actual authenticated exchange receipt.
+        # Lock the stores while persisting ownership, never infer it from a later login.
+        with self.vault._lock, target.vault._lock:
+            if self.vault.session_binding(profile) != source_binding:
+                raise ConnectorError("erp_identity_changed", "ERP会话在自动接续期间变化，本次接续已撤销。")
+            if target.vault.session_binding(profile) != target_binding:
+                return  # A later independent login owns the current target; do not mark it automatic.
+            record = {"profile": profile, "area": "drp", "source_root": str(self.root.resolve()),
+                      "source_binding": source_binding, "target_binding": target_binding}
+            path = target.root / "sso-links.sqlite3"
+            with sqlite3.connect(path, timeout=30) as conn:
+                conn.execute("CREATE TABLE IF NOT EXISTS auto_area_bindings (profile TEXT PRIMARY KEY,encrypted TEXT NOT NULL)")
+                conn.execute("INSERT INTO auto_area_bindings VALUES (?,?) ON CONFLICT(profile) DO UPDATE SET encrypted=excluded.encrypted",
+                             (profile, target.vault.seal(record)))
+            path.chmod(0o600)
+
+    def auto_connection(self, profile, area=None):
+        target = self.area_service(area)
+        if self.platform != "erp" or target.platform != "drp":
+            return {"status": "not_required", "erp_available": False, "can_password_login": True,
+                    "retry_after_seconds": 0, "message": "此板块使用自身已授权的登录态。", "error_code": ""}
+        context = (self.vault.session_binding(profile), target.vault.session_binding(profile))
+        state = self._auto_drp_states.get(profile, {})
+        if state.get("context") != context:
+            state = {"status": "not_prepared", "message": "分销将在本次需要时自动准备连接。", "error_code": ""}
+        retry = max(0, int(state.get("retry_at", 0) - time.monotonic() + 0.999))
+        can_password = state.get("status") != "login_pending" and (context[0] is None or state.get("status") == "failed")
+        return {"status": "cooldown" if retry and state.get("status") == "failed" else state.get("status", "not_prepared"),
+                "erp_available": context[0] is not None, "can_password_login": can_password,
+                "retry_after_seconds": retry, "message": state.get("message", ""), "error_code": state.get("error_code", "")}
+
+    async def prepare_area(self, profile, area=None, *, required=False):
+        """On-demand, same-actor DRP authorization; never retries a business operation."""
+        target = self.area_service(area)
+        if self.platform != "erp" or target.platform != "drp":
+            return target
+        async with self._auto_drp_locks.setdefault(profile, asyncio.Lock()):
+            flows = getattr(target.browser, "_password_flows", None)
+            flow_lock = getattr(flows, "_lock", None)
+            if callable(flow_lock):
+                # A new password attempt cannot start during the exchange and
+                # then be overwritten by the automatic authorization receipt.
+                async with flow_lock(profile):
+                    return await self._prepare_area_locked(profile, target, required)
+            return await self._prepare_area_locked(profile, target, required)
+
+    async def _prepare_area_locked(self, profile, target, required):
+        source_binding = self.vault.session_binding(profile)
+        target_binding = target.vault.session_binding(profile)
+        context = (source_binding, target_binding)
+        previous = self._auto_drp_states.get(profile, {})
+        ready = False
+        flows = getattr(target.browser, "_password_flows", None)
+        if flows is not None and flows.active(profile):
+            self._auto_drp_states[profile] = {"context": context, "status": "login_pending",
+                "message": "本人分销登录正在进行，自动接续不会覆盖该登录。", "error_code": "LOGIN_IN_PROGRESS"}
+            if required:
+                status = self.auto_connection(profile, "drp")
+                raise ConnectorError("auto_drp_unavailable", status["message"], details={"auto_connection": status})
+            return target
+        try:
+            receipt = self._auto_receipt(target, profile)
+            if (receipt and target_binding is not None and receipt["target_binding"] == target_binding
+                    and receipt["source_binding"] != source_binding):
+                await target.browser.discard_if_binding(profile, target_binding)
+                target_binding = target.vault.session_binding(profile)
+                context = (source_binding, target_binding)
+                previous = {}  # A source change never waits behind the old attempt's cooldown.
+            flows = getattr(target.browser, "_password_flows", None)
+            if flows is not None and flows.active(profile):
+                self._auto_drp_states[profile] = {"context": context, "status": "login_pending",
+                    "message": "本人分销登录正在进行，自动接续不会覆盖该登录。", "error_code": "LOGIN_IN_PROGRESS"}
+            elif previous.get("context") == context and previous.get("retry_at", 0) > time.monotonic():
+                pass
+            elif (target_binding is not None and previous.get("context") == context and previous.get("status") == "connected"
+                  and time.monotonic() - previous.get("verified_at", 0) < 5):
+                ready = True  # Concurrent first-use waiters reuse the completed, verified exchange.
+            else:
+                self._auto_drp_states[profile] = {"context": context, "status": "connecting",
+                    "message": "正在按当前员工的ERP授权自动准备分销连接。", "error_code": ""}
+                if target_binding is not None:
+                    try:
+                        await target.browser.identity(profile)
+                        ready = True
+                    except ConnectorError as error:
+                        if error.code not in {"ERP_SESSION_REJECTED", "SESSION_EXPIRED", "session_expired"}:
+                            raise
+                        await target.browser.discard_if_binding(profile, target_binding)
+                        target_binding = target.vault.session_binding(profile)
+                        context = (source_binding, target_binding)
+                        if target_binding is not None:
+                            # A concurrent valid independent login replaced the rejected generation.
+                            await target.browser.identity(profile)
+                            ready = True
+                if not ready and source_binding is None:
+                    self._auto_drp_states[profile] = {"context": context, "status": "erp_unavailable",
+                        "message": "当前尚未连接本人ERP；可先登录ERP自动接续，或独立登录分销。", "error_code": "erp_login_required"}
+                elif not ready:
+                    await self.connect_area_from_erp(profile, "drp", _automatic=True)
+                    await target.browser.identity(profile)
+                    ready = True
+                if ready:
+                    receipt = self._auto_receipt(target, profile)
+                    current_target = target.vault.session_binding(profile)
+                    if (receipt and receipt["target_binding"] == current_target
+                            and receipt["source_binding"] != self.vault.session_binding(profile)):
+                        await target.browser.discard_if_binding(profile, current_target)
+                        raise ConnectorError("erp_identity_changed", "ERP来源在准备期间变化，原自动分销连接已撤销。")
+                    self._auto_drp_states[profile] = {"context": (self.vault.session_binding(profile), target.vault.session_binding(profile)),
+                        "status": "connected", "verified_at": time.monotonic(),
+                        "message": "分销连接已准备完成，可继续当前业务。", "error_code": ""}
+        except asyncio.CancelledError:
+            self._auto_drp_states[profile] = {"context": context, "status": "failed", "retry_at": time.monotonic() + self._auto_drp_cooldown,
+                "message": "自动准备已中断，稍后可重试；未重试任何业务操作。", "error_code": "auto_drp_cancelled"}
+            raise
+        except (ConnectorError, OSError, sqlite3.Error) as error:
+            code = error.code if isinstance(error, ConnectorError) else "auto_drp_storage_failed"
+            self._auto_drp_states[profile] = {"context": context, "status": "failed", "retry_at": time.monotonic() + self._auto_drp_cooldown,
+                "message": "分销自动连接暂未完成，请稍后重试或检查本人ERP连接；ERP登录资料未被清除。", "error_code": code}
+        if required and not ready:
+            status = self.auto_connection(profile, "drp")
+            raise ConnectorError("auto_drp_unavailable", status["message"], details={"auto_connection": status})
+        return target
+
+    async def connect_area_from_erp(self, profile, area="drp", *, _automatic=False):
         target = self.area_service(area)
         if target.platform != "drp":
             raise ConnectorError("area_unavailable", "ERP接续入口仅用于当前员工的分销板块。")
@@ -99,6 +243,8 @@ class ConnectorService:
                     raise ConnectorError("erp_sso_unavailable", "本次分销接续缺少可核实的签发绑定，不能据此确认连接。")
                 if self.vault.session_binding(profile) != binding:
                     raise ConnectorError("erp_identity_changed", "ERP会话在接续期间变化，本次分销连接已撤销，请重新核验。")
+            if _automatic:
+                self._store_auto_receipt(target, profile, binding, issued_binding)
             return {**result, "area": "drp"}
         except BaseException:
             if issued_binding is not None:

@@ -254,6 +254,42 @@ async def test_login_route_allows_one_explicit_password_and_separate_encrypt_key
     assert repeat.aborted == 1
 
 
+async def test_official_same_origin_auth_proxy_shares_one_key_and_one_login_budget(manager):
+    browser, _contexts = manager
+    session = login_session()
+    session.server_passport_receipted = False
+    session.drp_login_name = "fixture-login"
+    browser._grant_login_action(session, "password")
+    proxy_key = ENCRYPT_KEY_URL.replace("https://gyl.scm121.com", "https://account.scm121.com")
+    proxy_password = PASSWORD_URL.replace("https://gyl.scm121.com", "https://account.scm121.com")
+    first_key = Route(proxy_key + "?username=fixture-login", "POST", {"success": True, "data": "fixture-key"})
+    await browser._route(session, first_key)
+    assert first_key.fulfilled == 1 and session.auth_remaining == 1
+    second_key = Route(ENCRYPT_KEY_URL + "?username=fixture-login", "POST")
+    await browser._route(session, second_key)
+    assert second_key.aborted == 1 and not second_key.fetched
+    login = Route(proxy_password, "POST", {"success": True, "data": {"access_token": token()}})
+    await browser._route(session, login)
+    assert login.fulfilled == 1 and session.auth_signal == "authenticated"
+    assert session.server_identity_sources["user_id"]["response_url"] == proxy_password
+    repeated = Route(PASSWORD_URL, "POST", login.response.value)
+    await browser._route(session, repeated)
+    assert repeated.aborted == 1 and not repeated.fetched
+    assert (await DrpIdentityVerifier().verify_session(session))["user_id"] == "300"
+
+
+@pytest.mark.parametrize("path", ["/api/auth/open/getEncryptKey2", "/api/auth/open/v2/login/gyl/accountLogin/extra",
+                                  "/api/auth/security/configV2/find", "/api/company/after/login/action"])
+async def test_account_proxy_does_not_open_unknown_authentication_or_business_paths(manager, path):
+    browser, _contexts = manager
+    session = login_session()
+    session.drp_login_name = "fixture-login"
+    browser._grant_login_action(session, "password")
+    request = Route("https://account.scm121.com" + path, "POST")
+    await browser._route(session, request)
+    assert request.aborted == 1 and request.fetched == 0 and session.auth_remaining == 1
+
+
 async def test_unknown_business_request_and_other_platform_assets_are_blocked_during_login(manager):
     browser, _contexts = manager
     session = login_session()
@@ -269,8 +305,8 @@ async def test_unknown_business_request_and_other_platform_assets_are_blocked_du
     assert "fixture-login" not in json.dumps(list(session.events))
 
 
-@pytest.mark.parametrize("replacement", ["gyl.scm121.com:444", "gyl.scm121.com:443",
-                                          "fixture@gyl.scm121.com", "fixture:secret@gyl.scm121.com"])
+@pytest.mark.parametrize("replacement", [item for host in ("gyl.scm121.com", "account.scm121.com")
+                                         for item in (host + ":444", host + ":443", "fixture@" + host, "fixture:secret@" + host)])
 @pytest.mark.parametrize("action,path,method,query", [
     ("password", "/open/getEncryptKey", "POST", "?username=fixture-login"),
     ("password", "/open/v2/login/gyl/accountLogin", "POST", ""),

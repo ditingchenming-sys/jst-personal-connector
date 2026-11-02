@@ -236,10 +236,12 @@ def test_expired_confirmation_returns_through_same_platform_and_never_auto_appro
     page.locator("#login").click()
     expect(page.locator("#platform-card")).to_be_visible()
     page.locator("#platform-continue").click()
+    expect(page.get_by_text("平台授权夹具", exact=True)).to_be_visible()
     body = next(body for _method, url, body in state["calls"] if urlsplit(url).path == "/portal/platform-start")
     assert body["next"] == next_path and body["area"] == "drp"
     state["next"] = next_path
-    page.goto(ORIGIN + "/login#platform_code=" + CODE)
+    page.goto(ORIGIN + "/login#platform_code=" + CODE, wait_until="commit")
+    expect(page).to_have_url(ORIGIN + next_path)
     expect(page.locator("#ack")).to_be_enabled()
     expect(page.locator("#approve")).to_be_disabled()
     assert not state["approved"]

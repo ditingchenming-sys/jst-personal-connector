@@ -39,6 +39,7 @@ label{display:flex;gap:8px;align-items:center}.field{display:flex;flex-direction
 <div class="card" style="margin-bottom:16px;padding:16px 20px"><label for="business-area">业务板块</label><select id="business-area" aria-label="业务板块" disabled style="margin-left:12px;padding:8px;border:1px solid #d5deeb;border-radius:4px"><option value="erp">ERP（常用）</option><option value="drp">分销（按需）</option></select></div>
 <section class="card login-card" id="login-area"><div class="login-heading"><h2>账号密码登录</h2><span>本人账号</span></div><p class="login-caption">优先复用有效登录；只有聚水潭要求时，才需短信验证。</p>
 <p id="authorization-notice" class="authorization-notice" role="alert" hidden>此管理页面没有有效授权，暂不能填写或操作。请通过连接器重新打开当前调用端的管理页面。</p>
+<button id="password-fallback" type="button" class="secondary" hidden>改用分销账号登录</button>
 <form id="account-form" autocomplete="off">
 <button id="erp-connect" type="button" class="secondary" hidden>使用已登录的ERP接续分销</button>
 <label class="field" for="username"><span>登录账号</span><input id="username" name="username" type="text" aria-label="聚水潭账号" autocomplete="username" placeholder="邮箱地址 / 手机号码" maxlength="128" required></label>
@@ -81,12 +82,12 @@ try{
  token=null;profile=null;history.replaceState(null,'',location.pathname);
 }
 let authorized=Boolean(token&&profile);
-const byId=id=>document.getElementById(id);let loginTimer=null,pollBusy=null,loginEpoch=0,termsReady=false;
+const byId=id=>document.getElementById(id);let loginTimer=null,pollBusy=null,loginEpoch=0,termsReady=false,autoConnection=null,manualChosen=false;
 byId('client').textContent='当前调用端：'+(profile||'未指定');
 if(!authorized){byId('authorization-notice').hidden=false;document.querySelectorAll('input,button,select').forEach(element=>{element.disabled=true;});}
 function message(text){byId('message').textContent=text;}
 function invalidateAuthorization(){
- authorized=false;token=null;profile=null;loginEpoch++;stopPolling();
+ authorized=false;token=null;profile=null;manualChosen=false;loginEpoch++;stopPolling();
  message('此管理页面授权已失效，请通过连接器重新打开。');
  try{const reference=history.state?.managementGrant;if(validReference(reference))sessionStorage.removeItem(grantPrefix+reference);}catch{}
  history.replaceState(null,'',location.pathname);
@@ -106,18 +107,19 @@ const stateNames={disconnected:'未连接',login_pending:'正在登录',saved_un
 const activeLogin=new Set(['starting','logging_in','need_code','verifying','notice_pending']);
 function stopPolling(){if(loginTimer)clearInterval(loginTimer);loginTimer=null;}
 async function loadArea(){
+ if(area==='drp'){byId('account-form').hidden=true;byId('login-progress').textContent='正在准备分销连接…';}
  const epoch=loginEpoch;let result;try{result=await api('login-options');}catch(error){if(epoch===loginEpoch)throw error;return;}if(epoch!==loginEpoch||!authorized)return;
  area=result.area||result.platform||area||'erp';
  if(!['erp','drp'].includes(area))throw Error('业务板块无效，请重新打开连接授权页。');
  const available=result.areas||[area];for(const option of byId('business-area').options)option.disabled=!available.includes(option.value);
  byId('business-area').value=area;byId('business-area').disabled=available.length<2;
- byId('erp-connect').hidden=!result.erp_sso_available;
+ updateAuto(result);byId('erp-connect').hidden=Boolean(autoConnection)||!result.erp_sso_available;
  for(const [id,key]of [['agreement','agreement_url'],['privacy','privacy_url']]){const target=new URL(result.terms[key]);if(target.protocol!=='https:')throw Error('登录协议地址无效，请更新组件。');byId(id).href=target.href;}
  try{const reference=history.state?.managementGrant;if(validReference(reference))sessionStorage.setItem(grantPrefix+reference,JSON.stringify({token,profile,area}));}catch{}
  termsReady=true;await refresh();
 }
 byId('business-area').onchange=()=>run(async()=>{
- loginEpoch++;stopPolling();area=byId('business-area').value;termsReady=false;byId('business-area').disabled=true;
+ loginEpoch++;stopPolling();area=byId('business-area').value;autoConnection=null;manualChosen=false;byId('password-fallback').hidden=true;termsReady=false;byId('business-area').disabled=true;
  byId('password').value='';byId('code').value='';byId('username').value='';byId('remember').checked=false;byId('terms').checked=false;
  byId('login-area').hidden=false;byId('connected-area').hidden=true;byId('account-form').hidden=true;byId('code-form').hidden=true;byId('cancel-login').hidden=true;
  byId('erp-connect').hidden=true;byId('login-progress').textContent='正在检查所选板块的本人连接…';await loadArea();
@@ -125,29 +127,33 @@ byId('business-area').onchange=()=>run(async()=>{
 window.addEventListener('hashchange',()=>{
  // A newly opened grant may reuse this tab without a document navigation.
  // Stop old requests/UI immediately, then let the entry parser consume the new hash.
- authorized=false;token=null;profile=null;loginEpoch++;stopPolling();
+ authorized=false;token=null;profile=null;manualChosen=false;loginEpoch++;stopPolling();
  document.querySelectorAll('input,button,select').forEach(element=>{element.disabled=true;});
  location.reload();
 });
+function automatic(){return area==='drp'&&autoConnection?.erp_available&&!manualChosen&&autoConnection.status!=='login_pending';}
+function updateAuto(result){if(area==='drp'&&result.auto_connection)autoConnection=result.auto_connection;document.querySelector('#login-area h2').textContent=automatic()?'分销连接':'账号密码登录';}
 function showLogin(state){
  if(!authorized)return;
- const active=activeLogin.has(state.status),pending=state.status==='identity_pending'||state.status==='notice_pending',connected=state.status==='connected';
+ const auto=automatic(),active=!auto&&activeLogin.has(state.status),pending=!auto&&(state.status==='identity_pending'||state.status==='notice_pending'),connected=auto?autoConnection.status==='connected':state.status==='connected';
+ byId('password-fallback').hidden=!(auto&&autoConnection.can_password_login&&['failed','cooldown'].includes(autoConnection.status));
  byId('login-area').hidden=connected;
  byId('connected-area').hidden=!connected;
- byId('account-form').hidden=active||pending||connected;
- byId('code-form').hidden=state.status!=='need_code';
+ byId('account-form').hidden=auto||active||pending||connected;
+ byId('code-form').hidden=auto||state.status!=='need_code';
  byId('cancel-login').hidden=!active&&!pending;
- byId('login-progress').textContent=state.message||'';
+ byId('login-progress').textContent=auto?(autoConnection.message||(connected?'分销已自动连接。':'正在自动连接分销…')):state.message||'';
  byId('password-submit').disabled=!termsReady||active||pending;
  byId('send-code').disabled=!state.can_send_code;
  byId('submit-code').disabled=state.status!=='need_code'||!state.code_sent||state.code_retry_after_seconds>0;
  byId('code-account').textContent=state.masked_account?'请查收账号 '+state.masked_account+' 绑定手机的短信。':'请查收本人账号绑定手机的短信。';
  byId('code-notice').textContent=state.retry_after_seconds>0?'请 '+state.retry_after_seconds+' 秒后再发送。':'';
- if(active){if(!loginTimer)loginTimer=setInterval(()=>run(pollLogin),2000);}else stopPolling();
+ if(auto&&!connected){if(!loginTimer)loginTimer=setInterval(()=>run(refresh),Math.max(2,autoConnection.retry_after_seconds||2)*1000);}else if(active){if(!loginTimer)loginTimer=setInterval(()=>run(pollLogin),2000);}else stopPolling();
  if(connected)run(refreshConnection);
 }
+byId('password-fallback').onclick=()=>{loginEpoch++;stopPolling();manualChosen=true;updateAuto({});showLogin({status:'disconnected',message:'请使用本人的分销账号登录。'});};
 async function pollLogin(){const epoch=loginEpoch;if(pollBusy===epoch)return;pollBusy=epoch;try{const result=await api('login-status');if(epoch===loginEpoch)showLogin(result.login);}catch(error){if(epoch===loginEpoch){stopPolling();throw error;}}finally{if(pollBusy===epoch)pollBusy=null;}}
-async function refreshConnection(){const epoch=loginEpoch;try{const result=await api('status');if(epoch!==loginEpoch||!authorized)return;const state=result.connection,display=state.identity_display;message((state.message||'')+'\n连接状态：'+(stateNames[state.status]||'状态待核对')+(display?.company_name&&display?.user_name?'\n公司：'+display.company_name+'；员工：'+display.user_name:state.identity?'\n公司编号：'+state.identity.company_id+'；员工编号：'+state.identity.user_id:''));byId('login').disabled=state.status==='connected';}catch(error){if(epoch===loginEpoch)throw error;}}
+async function refreshConnection(){const epoch=loginEpoch;try{const result=await api('status');if(epoch!==loginEpoch||!authorized)return;updateAuto(result);const state=result.connection,display=state.identity_display;message((automatic()?(autoConnection.message||'')+'\n':'')+(state.message||'')+'\n连接状态：'+(stateNames[state.status]||'状态待核对')+(display?.company_name&&display?.user_name?'\n公司：'+display.company_name+'；员工：'+display.user_name:state.identity?'\n公司编号：'+state.identity.company_id+'；员工编号：'+state.identity.user_id:''));byId('login').disabled=state.status==='connected';}catch(error){if(epoch===loginEpoch)throw error;}}
 async function refresh(){await refreshConnection();await pollLogin();}
 byId('refresh').onclick=()=>run(refresh);
 byId('login').onclick=()=>run(pollLogin);

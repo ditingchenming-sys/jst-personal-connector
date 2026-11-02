@@ -32,13 +32,29 @@ async def dispatch_action(service, profile, action, body, *, manager_opener=None
     """本机与远程共用业务分派；profile只能由各传输层的可信授权派生。"""
     if not isinstance(body, dict):
         raise ConnectorError("invalid_request", "请求必须是 JSON 对象。")
-    service = service.area_service(body.get("area"))
+    actions = {"status", "catalog", "query", "inspect", "network", "discovery-start", "discovery-inspect", "discovery-interact",
+               "interface-propose", "interface-validate", "interface-call", "interface-list", "write-propose", "write-preview",
+               "preview", "preview-status", "operation-recheck", "execute"}
+    if action not in actions:
+        raise ConnectorError("unsupported_action", "不支持此组件动作。")
+    root = service
+    area = body.get("area")
+    service = root.area_service(area) if action == "network" else await root.prepare_area(
+        profile, area, required=action not in {"status", "catalog"})
     body = dict(body)
     body.pop("area", None)  # Transport metadata; nested business parameters remain intact.
     if action == "status":
-        return await service.status(profile)
+        result = await service.status(profile)
+        if root.platform == "erp" and service.platform == "drp":
+            result["auto_connection"] = root.auto_connection(profile, area)
+            if result["connection"]["status"] != "connected" and result["auto_connection"]["status"] == "connected":
+                result["auto_connection"].update(status="failed", message=result["connection"].get("message", "分销当前登录态尚未通过核验。"))
+        return result
     if action == "catalog":
-        return service.catalog(body.get("query", ""), profile=profile)
+        result = service.catalog(body.get("query", ""), profile=profile)
+        if root.platform == "erp" and service.platform == "drp":
+            result["auto_connection"] = root.auto_connection(profile, area)
+        return result
     if action == "query":
         return await service.query(profile, body["capability_id"], body.get("parameters", {}))
     if action == "inspect":
@@ -151,6 +167,7 @@ def create_app(service: ConnectorService, *, opener=webbrowser.open) -> FastAPI:
             opened = await asyncio.to_thread(opener, str(request.base_url) + "ui#" + fragment)
             return {"ok": bool(opened), "message": "已请求打开本人登录授权页；连接完成后可关闭，回到AI或业务系统继续使用。"}
         if action == "open-confirmation":
+            await service.prepare_area(profile, body.get("area"), required=True)
             return await confirmation.open(profile, body["preview_id"], body["digest"], str(request.base_url), area=target.platform)
         return await dispatch_action(service, profile, action, body)
 
@@ -166,9 +183,13 @@ def create_app(service: ConnectorService, *, opener=webbrowser.open) -> FastAPI:
             raise ConnectorError("identity_parameter_rejected", "账号身份和ERP接续来源由可信连接解析，不能通过请求指定。")
         target = service.area_service(body.get("area"))
         if action == "status":
-            return await target.status(profile)
+            return await dispatch_action(service, profile, "status", {"area": body.get("area")})
         if action == "login-options":
-            return service.area_login_options(profile, body.get("area"))
+            await service.prepare_area(profile, body.get("area"))
+            result = service.area_login_options(profile, body.get("area"))
+            if service.platform == "erp" and target.platform == "drp":
+                result["auto_connection"] = service.auto_connection(profile, body.get("area"))
+            return result
         if action == "login-from-erp":
             return await service.connect_area_from_erp(profile, area=target.platform)
         if action == "identity-evidence":
@@ -195,8 +216,10 @@ def create_app(service: ConnectorService, *, opener=webbrowser.open) -> FastAPI:
             await target.browser.logout(profile)
             return {"ok": True, "message": "已退出该调用端账号并清除其登录资料。"}
         if action == "preview-status":
+            target = await service.prepare_area(profile, body.get("area"), required=True)
             return {"ok": True, "preview": target.ledger.get_preview(profile, body["preview_id"])}
         if action == "approve":
+            target = await service.prepare_area(profile, body.get("area"), required=True)
             return target.approve(profile, body["preview_id"], body["digest"])
         raise ConnectorError("unsupported_action", "不支持此管理动作。")
 
