@@ -48,7 +48,7 @@ class ErpLinks:
         return {"ok": True, "message": "已配对本人的ERP来源；在分销授权页可免填密码接续，执行时仍核验实际身份。"}
 
 
-async def connect_from_erp(service, profile, *, source_factory=None):
+async def connect_from_erp(service, profile, *, source_factory=None, include_binding=False):
     if service.platform != "drp":
         raise ConnectorError("platform_mismatch", "此接续入口仅用于分销平台。")
     record = ErpLinks(service.root, service.vault).get(profile)
@@ -92,7 +92,11 @@ async def connect_from_erp(service, profile, *, source_factory=None):
             if source.vault.session_binding(record["source_profile"]) != binding:
                 raise ConnectorError("erp_identity_changed", "ERP会话在接续时变化，已撤销本次分销连接，请重新核验。")
         # verified_scope rechecks its identity on exit; do not return before it completes.
-        return {"ok": True, "login": result}
+        response_value = {"ok": True, "login": result}
+        if include_binding:
+            # Installed aggregation code removes this before returning any public response.
+            response_value["_issued_binding"] = issued_binding
+        return response_value
     except (PlaywrightError, OSError, ValueError, TypeError, AttributeError):
         if issued_binding is not None:
             await service.browser.discard_if_binding(profile, issued_binding)

@@ -29,6 +29,8 @@ create_server(Path("."), "codex", client=ControlledClient()).run(transport="stdi
             assert {"propose_write_interface", "preview_write_interface", "request_operation_confirmation"} <= set(tools)
             assert tools["propose_read_interface"].inputSchema["properties"]["read_evidence"]["type"] == "object"
             assert not any("approve" in name for name in tools)
+            for tool in tools.values():
+                assert "area" in tool.inputSchema["properties"]
             body = {"discovery_id": "fixture-discovery", "request_id": "fixture-request", "name": "fixture-query",
                     "purpose": "Read fixture records", "read_evidence": {
                         "source_url": "https://www.erp321.com/epaas", "description": "Official search request"},
@@ -38,6 +40,11 @@ create_server(Path("."), "codex", client=ControlledClient()).run(transport="stdi
             result = await session.call_tool("propose_read_interface", body)
             value = result.structuredContent or json.loads(result.content[0].text)
             assert value["action"] == "interface-propose" and value["body"] == body
+            selected = await session.call_tool("propose_read_interface", {**body, "area": "drp"})
+            value = selected.structuredContent or json.loads(selected.content[0].text)
+            assert value["body"] == {**body, "area": "drp"}
+            invalid_area = await session.call_tool("connector_status", {"area": "another-employee"})
+            assert invalid_area.isError
             invalid = await session.call_tool("propose_read_interface", {**body, "read_evidence": "not-an-object"})
             assert invalid.isError
 

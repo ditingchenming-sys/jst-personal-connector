@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import threading
 from pathlib import Path
 
 from .browser import BrowserManager
@@ -30,6 +31,79 @@ class ConnectorService:
         self._discovery = None
         self._interfaces = None
         self._writes = None
+        self._area_children = {}
+        self._area_lock = threading.RLock()
+
+    def area_service(self, area=None):
+        """Select this actor's business area without changing authorization.
+
+        The public connector owns authentication. Its optional DRP service has
+        its own cookies, verifier, contracts and ledger, but receives the same
+        already-authenticated profile from the transport layer.
+        """
+        area = self.platform if area is None else area
+        if not isinstance(area, str) or area not in {"erp", "drp"}:
+            raise ConnectorError("invalid_area", "业务板块须为 erp（聚水潭ERP）或 drp（分销）。")
+        if area == self.platform:
+            return self
+        if self.platform != "erp" or area != "drp":
+            raise ConnectorError("area_unavailable", "此历史独立分销连接只管理自身分销授权，不能转用其他ERP连接。")
+        with self._area_lock:
+            if area not in self._area_children:
+                # Do not adopt a previous standalone DRP store or EmployeeStore:
+                # its separate actor bindings remain untouched and still usable.
+                self._area_children[area] = ConnectorService(self.root / "modules" / area, platform=area)
+            return self._area_children[area]
+
+    def area_login_options(self, profile, area=None):
+        target = self.area_service(area)
+        result = target.login_options(profile)
+        if self.platform == "erp" and target.platform == "drp":
+            # Availability only means a saved source can be checked on demand;
+            # opening login options does not launch an ERP browser or exchange.
+            result["erp_sso_available"] = self.vault.load_session(profile) is not None
+            result["erp_sso_source"] = "same_connector"
+        return {**result, "area": target.platform, "default_area": self.platform,
+                "areas": ["erp", "drp"] if self.platform == "erp" else ["drp"]}
+
+    async def connect_area_from_erp(self, profile, area="drp"):
+        target = self.area_service(area)
+        if target.platform != "drp":
+            raise ConnectorError("area_unavailable", "ERP接续入口仅用于当前员工的分销板块。")
+        from .erp_sso import ErpLinks, connect_from_erp
+        if self.platform == "drp":
+            # Preserve explicitly paired 0.4 standalone installations.
+            return await connect_from_erp(target, profile)
+        if target.vault.load_session(profile):
+            raise ConnectorError("ACCOUNT_ALREADY_CONNECTED", "本调用端已有分销账号，请先检查连接；换账号须先退出分销。")
+        if self.vault.load_session(profile) is None:
+            raise ConnectorError("erp_login_required", "请先连接本人的ERP账号，再按需接续分销；也可独立登录分销。")
+        issued_binding = None
+        try:
+            async with self.browser.verified_scope(profile) as identity:
+                binding = self.vault.session_binding(profile)
+                saved = self.vault.load_session(profile)
+                if saved is None or saved["identity"] != identity or not binding:
+                    raise ConnectorError("erp_identity_changed", "当前ERP账号已变化，请重新核验本人连接。")
+                # Both profiles and source root come from installed service state;
+                # no model/web body can nominate another employee or directory.
+                links = ErpLinks(target.root, target.vault)
+                links.pair(profile, self.root, profile)
+                paired = links.get(profile)
+                if (paired.get("source_identity") != identity or paired.get("source_profile") != profile
+                        or paired.get("source_root") != str(self.root.resolve())):
+                    raise ConnectorError("erp_identity_changed", "ERP接续配对未绑定当前员工的本人来源。")
+                result = await connect_from_erp(target, profile, include_binding=True)
+                issued_binding = result.pop("_issued_binding", None)
+                if not isinstance(issued_binding, str) or not issued_binding:
+                    raise ConnectorError("erp_sso_unavailable", "本次分销接续缺少可核实的签发绑定，不能据此确认连接。")
+                if self.vault.session_binding(profile) != binding:
+                    raise ConnectorError("erp_identity_changed", "ERP会话在接续期间变化，本次分销连接已撤销，请重新核验。")
+            return {**result, "area": "drp"}
+        except BaseException:
+            if issued_binding is not None:
+                await target.browser.discard_if_binding(profile, issued_binding)
+            raise
 
     def _generic(self):
         if self._interfaces is None:
@@ -109,8 +183,20 @@ class ConnectorService:
             raise ConnectorError("management_authorization_required", "此操作仅限本人管理页面或可信系统授权。")
 
     async def status(self, profile: str) -> dict:
-        return {"ok": True, "client": profile, "platform": self.platform,
-                "connection": await self.browser.status(profile)}
+        connection = await self.browser.status(profile)
+        modules = {self.platform: {"area": self.platform, "initialized": True, "live_checked": True,
+                                   "connection": connection}}
+        if self.platform == "erp":
+            child = self._area_children.get("drp")
+            modules["drp"] = {"area": "drp", "initialized": child is not None, "live_checked": False,
+                              "status": "not_loaded"}
+            if child is not None:
+                try:
+                    modules["drp"]["status"] = "saved_session" if child.vault.load_session(profile) else "disconnected"
+                except ConnectorError:
+                    modules["drp"]["status"] = "needs_check"
+        return {"ok": True, "client": profile, "platform": self.platform, "area": self.platform,
+                "connection": connection, "modules": modules}
 
     def login_options(self, profile=None):
         if self.platform == "drp":
@@ -224,8 +310,19 @@ class ConnectorService:
             record = self.ledger.finish(profile, preview_id, "succeeded", result)
         return {"ok": record["status"] == "succeeded", "preview": record}
 
+    async def close_idle(self):
+        for child in tuple(self._area_children.values()):
+            await child.close_idle()
+        cleanup = getattr(self.browser, "close_idle", None)
+        if callable(cleanup):
+            await cleanup()
+
     async def close(self):
-        if self._discovery is not None:
-            await self._discovery.close()
-        await self.browser.close()
+        try:
+            for child in tuple(self._area_children.values()):
+                await child.close()
+        finally:
+            if self._discovery is not None:
+                await self._discovery.close()
+            await self.browser.close()
 

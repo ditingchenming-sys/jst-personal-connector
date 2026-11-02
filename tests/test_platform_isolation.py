@@ -21,13 +21,14 @@ from jst_connector.service import ConnectorService
 from jst_connector.vault import Vault
 
 
-def test_default_platform_paths_and_configs_are_independent(tmp_path, monkeypatch):
+def test_platform_stores_are_independent_but_config_has_one_connector_name(tmp_path, monkeypatch):
     monkeypatch.setenv("JST_CONNECTOR_DATA_DIR", str(tmp_path))
     assert data_directory(platform="erp") == tmp_path
     assert data_directory(platform="drp") == tmp_path / "drp"
     assert data_directory(tmp_path / "explicit", platform="drp") == tmp_path / "explicit"
     config = json.loads(_write_config(tmp_path / "drp", "codex", "generic", platform="drp"))
-    args = config["mcpServers"]["jushuitan-drp"]["args"]
+    assert set(config["mcpServers"]) == {"jushuitan"}
+    args = config["mcpServers"]["jushuitan"]["args"]
     assert args[args.index("--platform") + 1] == "drp"
     assert args[args.index("--data-dir") + 1] == str(tmp_path / "drp")
     assert "jushuitan" in json.loads(_write_config(tmp_path, "codex", "generic"))["mcpServers"]

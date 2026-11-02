@@ -7,6 +7,7 @@
 <section class="card" id="employee-card"><h2>登录员工账号</h2><p class="caption">请使用管理员为本人创建的连接器员工账号。此账号与聚水潭账号分别验证。</p>
 <form id="employee-form"><label for="employee">员工账号</label><input id="employee" autocomplete="username" maxlength="128" required><label for="employee-password">员工密码</label><input id="employee-password" type="password" autocomplete="current-password" maxlength="1024" required><button type="submit" class="full">登录员工账号</button></form></section>
 <section class="card" id="jst-card" hidden><h2 id="connection-title">连接本人的聚水潭</h2><p id="employee-display" class="caption"></p>
+<label for="business-area">业务板块</label><select id="business-area" aria-label="业务板块" disabled style="width:100%;padding:10px;border:1px solid #c7d4e4;border-radius:5px"><option value="erp">ERP（常用）</option><option value="drp">分销（按需）</option></select>
 <form id="jst-form"><button id="erp-connect" type="button" class="secondary" hidden>使用已登录的ERP接续分销</button><label for="username">聚水潭账号</label><input id="username" autocomplete="username" maxlength="128" required><label for="password">聚水潭密码</label><input id="password" type="password" autocomplete="off" maxlength="1024" required>
 <label class="check"><input id="remember" type="checkbox"><span>记住密码（加密保存在服务器，仅本员工本调用端使用，退出聚水潭账号时清除）</span></label>
 <label class="check"><input id="terms" type="checkbox" required><span>我已阅读并同意聚水潭<a id="agreement" target="_blank" rel="noreferrer noopener">《用户协议》</a>和<a id="privacy" target="_blank" rel="noreferrer noopener">《隐私政策》</a></span></label><button id="jst-submit" type="submit" class="full" disabled>登录并连接</button></form>
@@ -18,19 +19,19 @@
 </main><script>
 'use strict';
 const $=id=>document.getElementById(id),params=new URLSearchParams(location.search);
-let csrf='',session=null,timer=null,pollBusy=false,epoch=0,termsReady=false;
+let csrf='',session=null,timer=null,pollBusy=null,epoch=0,termsReady=false,area=params.get('area')||null;
 const requestedConnection=params.get('connection');
 function message(value){$('message').textContent=value;}
 function stop(){if(timer)clearInterval(timer);timer=null;}
-function signedOut(){epoch++;stop();csrf='';session=null;$('employee-card').hidden=false;$('jst-card').hidden=true;$('password').value='';$('code').value='';}
+function signedOut(){epoch++;stop();csrf='';session=null;$('employee-card').hidden=false;$('jst-card').hidden=true;$('password').value='';$('code').value='';message('员工登录已失效，请重新登录本人员工账号。');}
 async function request(path,body,method='POST'){
  const response=await fetch(path,{method,credentials:'same-origin',redirect:'error',headers:{'Content-Type':'application/json',...(csrf?{'X-CSRF-Token':csrf}:{})},...(method==='GET'?{}:{body:JSON.stringify(body||{})})});
  const result=await response.json();if(response.status===401){signedOut();}
  if(!response.ok||result.ok===false)throw Error(result.error?.message||'连接请求失败，请检查网络。');return result;
 }
-const api=(action,body)=>request('/portal/connection/'+action,body);
+const api=(action,body={})=>request('/portal/connection/'+action,{...body,...(area?{area}:{})});
 async function run(action){try{await action();}catch(error){message(error.message);}}
-function nextPath(){const value=params.get('next');return value&&/^\/operations\/[A-Za-z0-9_-]{16,80}(?:\?connection=[A-Za-z0-9_-]+)?$/.test(value)?value:null;}
+function nextPath(){const value=params.get('next');if(!value||!value.startsWith('/operations/'))return null;try{const target=new URL(value,location.origin);if(target.origin!==location.origin||!/^\/operations\/[A-Za-z0-9_-]{16,80}$/.test(target.pathname)||target.hash)return null;for(const[key,part]of target.searchParams){if(key==='connection'&&/^[A-Za-z0-9_-]+$/.test(part))continue;if(key==='area'&&['erp','drp'].includes(part))continue;return null;}return target.pathname+target.search;}catch{return null;}}
 function showLogin(state){
  const active=['starting','logging_in','need_code','verifying','identity_pending','notice_pending'].includes(state.status),connected=state.status==='connected';
  $('jst-form').hidden=active||connected;$('code-form').hidden=state.status!=='need_code';$('complete').hidden=!connected;$('cancel').hidden=!active;
@@ -39,23 +40,25 @@ function showLogin(state){
  if(active&&!timer)timer=setInterval(()=>run(poll),2000);if(!active)stop();
  if(connected)run(status);
 }
-async function poll(){if(pollBusy)return;pollBusy=true;const current=epoch;try{const result=await api('login-status');if(current===epoch)showLogin(result.login);}finally{pollBusy=false;}}
-async function status(){const current=epoch,result=await api('status');if(current!==epoch)return;const value=result.connection,identity=value.identity_display;message((value.message||'')+'\n连接状态：'+(value.status==='connected'?'已连接':value.status==='disconnected'?'未连接':'待核验')+(identity?.company_name?'\n公司：'+identity.company_name+'；员工：'+identity.user_name:''));}
+async function poll(){const current=epoch;if(pollBusy===current)return;pollBusy=current;try{const result=await api('login-status');if(current===epoch)showLogin(result.login);}catch(error){if(current===epoch)throw error;}finally{if(pollBusy===current)pollBusy=null;}}
+async function status(){const current=epoch;try{const result=await api('status');if(current!==epoch)return;const value=result.connection,identity=value.identity_display;message((value.message||'')+'\n连接状态：'+(value.status==='connected'?'已连接':value.status==='disconnected'?'未连接':'待核验')+(identity?.company_name?'\n公司：'+identity.company_name+'；员工：'+identity.user_name:''));}catch(error){if(current===epoch)throw error;}}
 async function ready(value){
  if(requestedConnection&&value.connection_id&&requestedConnection!==value.connection_id){signedOut();message('此页面对应另一个调用端，请重新登录本人的员工账号。');return;}
  session=value;csrf=value.csrf;$('employee-card').hidden=true;$('jst-card').hidden=false;$('employee-display').textContent='员工：'+value.username+'；调用端：'+value.client;
+ area=area||value.default_area||'erp';if(!['erp','drp'].includes(area))throw Error('业务板块无效，请重新打开连接授权页。');
  const target=nextPath();if(target){location.replace(target);return;}
- const terms=await api('login-options');if(terms.platform_name){document.title=terms.platform_name+'连接授权';$('connection-title').textContent='连接本人的'+terms.platform_name;}$('erp-connect').hidden=!terms.erp_sso_available;for(const[id,key]of[['agreement','agreement_url'],['privacy','privacy_url']]){const url=new URL(terms.terms[key]);if(url.protocol!=='https:')throw Error('协议地址无效，请更新连接器。');$(id).href=url.href;}
- termsReady=true;await status();await poll();
+ await loadArea();
 }
+async function loadArea(){const current=epoch;let terms;try{terms=await api('login-options');}catch(error){if(current===epoch)throw error;return;}if(current!==epoch||!session)return;area=terms.area||terms.platform||area||'erp';const available=terms.areas||session.areas||[area];for(const option of $('business-area').options)option.disabled=!available.includes(option.value);$('business-area').value=area;$('business-area').disabled=available.length<2;if(terms.platform_name)$('connection-title').textContent='连接本人的'+terms.platform_name;$('erp-connect').hidden=!terms.erp_sso_available;for(const[id,key]of[['agreement','agreement_url'],['privacy','privacy_url']]){const url=new URL(terms.terms[key]);if(url.protocol!=='https:')throw Error('协议地址无效，请更新连接器。');$(id).href=url.href;}termsReady=true;await status();if(current===epoch)await poll();}
+$('business-area').onchange=()=>run(async()=>{epoch++;stop();area=$('business-area').value;termsReady=false;$('business-area').disabled=true;$('password').value='';$('code').value='';$('username').value='';$('remember').checked=false;$('terms').checked=false;$('jst-form').hidden=true;$('complete').hidden=true;$('code-form').hidden=true;$('cancel').hidden=true;$('erp-connect').hidden=true;$('progress').textContent='正在检查所选板块的本人连接…';await loadArea();});
 $('employee-form').onsubmit=event=>{event.preventDefault();run(async()=>{const button=event.submitter;button.disabled=true;const password=$('employee-password').value;$('employee-password').value='';try{const value=await request('/portal/login',{username:$('employee').value.trim(),password,...(requestedConnection?{connection_id:requestedConnection}:{})});await ready(value);}finally{button.disabled=false;}});};
-$('jst-form').onsubmit=event=>{event.preventDefault();run(async()=>{const current=++epoch,password=$('password').value;$('password').value='';$('jst-submit').disabled=true;try{const result=await api('login-password',{username:$('username').value.trim(),password,remember:$('remember').checked,terms_accepted:$('terms').checked});if(current===epoch)showLogin(result.login);}finally{if(current===epoch)$('jst-submit').disabled=!termsReady||$('jst-form').hidden;}});};
-$('send-code').onclick=()=>run(async()=>{$('send-code').disabled=true;try{showLogin((await api('login-send-code')).login);}catch(error){await poll();throw error;}});
-$('code-form').onsubmit=event=>{event.preventDefault();run(async()=>{const code=$('code').value;$('code').value='';$('submit-code').disabled=true;try{showLogin((await api('login-submit-code',{code})).login);}catch(error){await poll();throw error;}});};
-$('cancel').onclick=()=>run(async()=>{epoch++;showLogin((await api('login-cancel')).login);});
+$('jst-form').onsubmit=event=>{event.preventDefault();run(async()=>{const current=++epoch,password=$('password').value;$('password').value='';$('jst-submit').disabled=true;try{const result=await api('login-password',{username:$('username').value.trim(),password,remember:$('remember').checked,terms_accepted:$('terms').checked});if(current===epoch)showLogin(result.login);}catch(error){if(current===epoch)throw error;}finally{if(current===epoch)$('jst-submit').disabled=!termsReady||$('jst-form').hidden;}});};
+$('send-code').onclick=()=>run(async()=>{const current=epoch;$('send-code').disabled=true;try{const result=await api('login-send-code');if(current===epoch)showLogin(result.login);}catch(error){if(current===epoch){await poll();throw error;}}});
+$('code-form').onsubmit=event=>{event.preventDefault();run(async()=>{const current=epoch,code=$('code').value;$('code').value='';$('submit-code').disabled=true;try{const result=await api('login-submit-code',{code});if(current===epoch)showLogin(result.login);}catch(error){if(current===epoch){await poll();throw error;}}});};
+$('cancel').onclick=()=>run(async()=>{const current=++epoch;try{const result=await api('login-cancel');if(current===epoch)showLogin(result.login);}catch(error){if(current===epoch)throw error;}});
 $('refresh').onclick=()=>run(async()=>{await status();await poll();});
-$('erp-connect').onclick=()=>run(async()=>{const current=++epoch;$('erp-connect').disabled=true;message('正在核验已配对的ERP并接续分销…');try{const result=await api('login-from-erp');if(current===epoch)showLogin(result.login);}finally{$('erp-connect').disabled=false;}});
-$('jst-logout').onclick=()=>run(async()=>{if(!confirm('退出本员工本调用端的聚水潭账号并清除其登录资料？'))return;epoch++;stop();await api('logout');$('username').value='';$('remember').checked=false;await status();await poll();});
+$('erp-connect').onclick=()=>run(async()=>{const current=++epoch;$('erp-connect').disabled=true;message('正在核验本人的ERP并接续分销…');try{const result=await api('login-from-erp');if(current===epoch)showLogin(result.login);}catch(error){if(current===epoch)throw error;}finally{if(current===epoch)$('erp-connect').disabled=false;}});
+$('jst-logout').onclick=()=>run(async()=>{if(!confirm('退出本员工当前板块的聚水潭账号并清除其登录资料？'))return;const current=++epoch;stop();try{await api('logout');if(current!==epoch)return;$('username').value='';$('remember').checked=false;await status();if(current===epoch)await poll();}catch(error){if(current===epoch)throw error;}});
 $('employee-logout').onclick=()=>run(async()=>{await request('/portal/logout');signedOut();message('已退出此页面；聚水潭连接仍保留。');});
 run(async()=>{try{await ready(await request('/portal/session',null,'GET'));}catch(error){signedOut();message(error.message);}});
 window.addEventListener('pagehide',stop);

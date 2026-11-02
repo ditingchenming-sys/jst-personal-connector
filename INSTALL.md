@@ -1,6 +1,6 @@
 # 安装与更新
 
-需要 Python 3.11+、网络访问和支持 MCP stdio 的 AI 客户端。当前版本 0.4.0，可选 ERP 或分销平台、本机组件或自己部署的 Linux 多员工 HTTPS 服务。GitHub 只分发安装包，不代管任何账号或业务服务。
+需要 Python 3.11+、网络访问和支持 MCP stdio 的 AI 客户端。当前版本 0.5.0，对外只有一个聚水潭连接器，默认ERP、分销按需兼容；可选本机组件或自己部署的Linux多员工HTTPS服务。GitHub只分发安装包，不代管账号或业务服务。
 
 ## 完整分发包
 
@@ -140,48 +140,47 @@ python -m jst_connector config --client workbuddy --format workbuddy \
 
 ## 聚水潭分销平台
 
-官方分销统一登录：`https://account.scm121.com/user/login`；业务入口：`https://sc.scm121.com/`。使用本包的 `--platform drp`，不需要另外安装一套工作台适配器才能访问分销域。
+官方分销统一登录为 `https://account.scm121.com/user/login`，业务入口为 `https://sc.scm121.com/`。0.5.0 将分销作为同一个聚水潭连接器的内部兼容板块，不再要求第二连接器、第二域名、第二个员工账号或第二份调用令牌。
 
-本机生成独立连接器条目：
-
-```sh
-python -m jst_connector config --platform drp --client codex --format codex --output codex-drp.toml
-python -m jst_connector config --platform drp --client workbuddy --format workbuddy --output workbuddy-drp.json
-```
-
-配置条目名 `jushuitan-drp`，保留已有 `jushuitan`。默认分销运行目录为默认 ERP 目录下的 `drp/`；若指定 `--data-dir`，须使用新的独立目录。每个目录通过 `.platform.json` 绑定平台；已有 ERP 资料不会被改为分销资料，也不复制已有 ERP Cookie。平台不能由模型工具参数切换。
-
-首次调用分销连接器的 `open_connection_manager`，在本人授权页独立登录分销，验证码仅按原系统要求由本人完成。连接器以官方认证回执和分销当前用户接口交叉核对身份，再加密保存；之后优先恢复分销自身的有效登录态。
-
-已有本人ERP连接时，可先配置一次来源配对，免填分销账号密码接续：
+使用上文正常配置即可，只生成一个 `jushuitan` 条目：
 
 ```sh
-python -m jst_connector link-erp --platform drp --client codex \
-  --erp-data-dir /实际ERP运行目录 --erp-client codex
+python -m jst_connector config --client codex --format codex --output codex-mcp.toml
+python -m jst_connector config --client workbuddy --format workbuddy --output workbuddy-mcp.json
 ```
 
-分销若使用自定义目录，还需给此命令传入同一 `--data-dir`。随后本人打开分销授权页，点击“使用已登录的ERP接续分销”。来源必须是连接器已验证并保存的本人ERP会话，不能使用未导入或未授权的其他浏览器会话。后台固定调用ERP官方 `GetRedirectTokenV2` 换发分销授权，再核验分销身份；源身份变化、换发失败或验证失败时停止，可继续使用独立分销登录。
+日常工具调用省略 `area` 为ERP；需要分销时，在同一套工具中指定 `area="drp"`，例如 `connector_status(area="drp")`、`open_connection_manager(area="drp")`、`start_discovery(area="drp")`。后续同一分销任务的探索、保存、预览、确认、执行与回查都使用同一 `area`。
 
-远程部署与员工授权同样固定为分销平台，并使用独立域名/运行目录及各自令牌：
+本人授权页内可选择ERP或分销。已经在本连接器登录ERP时，分销页可以接续同一员工的ERP授权，无须再运行配对命令；也可使用本人分销账号独立登录，短信仍由本人按原系统要求完成。页面只作登录授权、验证码、连接状态和退出，完成即可关闭。
+
+远程也只运行一个服务和一个HTTPS域名：
 
 ```sh
-python -m jst_connector serve-remote --platform drp --data-dir /var/lib/jst-drp \
-  --public-url https://drp-connector.example.com --port 8766
-python -m jst_connector employee-add --platform drp --data-dir /var/lib/jst-drp \
-  --username alice --client workbench --token-output /var/lib/jst-credentials/alice-drp.json
+python -m jst_connector serve-remote --data-dir /var/lib/jst-connector \
+  --public-url https://jst.example.com --port 8765
+python -m jst_connector employee-add --data-dir /var/lib/jst-connector \
+  --username alice --client workbench --token-output /var/lib/jst-credentials/alice.json
 ```
 
-员工客户端配置也加 `--platform drp --remote-url https://drp-connector.example.com`，注入该员工的分销专属 `JST_CONNECTOR_ACCESS_TOKEN`。同一市场条目可以提供 ERP 与 `jst-drp` 两个连接条目，但不能共用访问令牌或根据请求自报的员工编号切换身份。
+客户端配置一个 `--remote-url https://jst.example.com`，由安全环境变量 `JST_CONNECTOR_ACCESS_TOKEN` 注入本员工本调用端的令牌。同一令牌在两个板块始终对应同一员工；`area`只选择本人业务板块，不能选择其他人的profile、公司、来源目录或票据。
 
-需要远程员工ERP接续时，由服务器本机管理员核对两侧员工和调用端后配对：
+直接API调用同样使用一个地址和同一鉴权。例如分销连接状态请求为：
 
-```sh
-python -m jst_connector link-erp --platform drp --data-dir /var/lib/jst-drp \
-  --username alice --client workbench --erp-data-dir /var/lib/jst-erp \
-  --erp-username alice --erp-client workbench
+```json
+{"area":"drp"}
 ```
 
-两侧目录都须是已配置、可由当前运行环境解密的独立存储，来源ERP员工须先完成本人登录。用户名相同不代表系统自动认定同一人，以上配对由管理员核对并明确配置。源或目标重新登录、退出、公司切换均受会话绑定核对；两平台的实际公司/员工编号不要求数值相同。
+将其作为JSON正文发送到同一服务的 `/api/status`。其他动作沿用原路径并增加 `area`。统一入口仍使用其默认ERP传输平台；不要把HTTP平台头改成DRP来路由，板块选择由正文 `area` 承载。登录和业务批准仍只能经本人员工浏览器会话/可信系统，API令牌不能自批写入。
+
+连接器内部按需创建分销模块，存储位于统一运行目录的 `modules/drp/`。会话、域名策略、身份核验、保存契约和执行账本仍分开；少用分销时不会为其初始化或恢复浏览器、不会自动换票。板块选择和退出仅作用于所选板块，不混用ERP Cookie。
+
+### 工作台统一展示与旧版兼容
+
+任何工作台或市场都只登记一个“聚水潭个人连接器”，分销在其内部按需调用，不注册第二张分销卡片。若旧工作台已存在 `jst-drp` 条目，可作为隐藏的兼容别名保留旧绑定，逐步改用统一入口；连接器发版不会替所有工作台修改各自已存目录。
+
+0.4 的独立 `--platform drp` 服务及 `link-erp` 管理配对命令保留兼容。旧分销目录、EmployeeStore和调用凭证不会被新统一模块自动认作同一个员工，也不会删除。旧独立实例省略area仍为分销，不能通过area转用未授权ERP；新接入不需要这些旧分离部署参数。
+
+从旧分离部署迁移时，保留旧安装目录、数据和密钥，先更新正常ERP入口；在统一授权页按需接续/登录分销。旧条目绑定是否迁移由对接系统核对其真实员工关系，不能按相同用户名或公司编号自动合并。完成后再由部署方处理旧服务，不自动停服务或清凭据。
 
 本版身份协议工程验收以官方 `sc` 供货侧当前用户接口为依据；其他入口或角色须按实际身份协议继续核验，不能套用供货侧字段或冒称全部角色已真实验收。查询与写入按同样的实际请求发现、预览、可信确认和回查机制使用，不设固定业务名称清单。
 

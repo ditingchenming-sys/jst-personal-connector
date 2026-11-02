@@ -36,6 +36,7 @@ label{display:flex;gap:8px;align-items:center}.field{display:flex;flex-direction
 <section class="login-stage" aria-label="账号连接">
 <div class="welcome-panel"><p class="eyebrow">本人账号 · 独立连接</p><h1>你的聚水潭账号，<br>独立连接。</h1><p class="welcome-description">每个 AI 调用端独立使用本人账号。<br>登录资料在本机加密保存，退出账号时清除。</p><div class="decoration" aria-hidden="true"><div class="decor-ring"></div><div class="decor-sheet"><span></span><span></span></div><div class="decor-tile"><span></span><span></span><span></span></div></div></div>
 <div class="signin-column">
+<div class="card" style="margin-bottom:16px;padding:16px 20px"><label for="business-area">业务板块</label><select id="business-area" aria-label="业务板块" disabled style="margin-left:12px;padding:8px;border:1px solid #d5deeb;border-radius:4px"><option value="erp">ERP（常用）</option><option value="drp">分销（按需）</option></select></div>
 <section class="card login-card" id="login-area"><div class="login-heading"><h2>账号密码登录</h2><span>本人账号</span></div><p class="login-caption">优先复用有效登录；只有聚水潭要求时，才需短信验证。</p>
 <p id="authorization-notice" class="authorization-notice" role="alert" hidden>此管理页面没有有效授权，暂不能填写或操作。请通过连接器重新打开当前调用端的管理页面。</p>
 <form id="account-form" autocomplete="off">
@@ -60,42 +61,43 @@ const fragment=new URLSearchParams(location.hash.slice(1));
 const grantPrefix='jst-management-grant:',grantReference=history.state?.managementGrant;
 const validReference=value=>typeof value==='string'&&/^[0-9a-f-]{36}$/.test(value);
 const navigationType=performance.getEntriesByType('navigation')[0]?.type;
-let token=null,profile=null;
+let token=null,profile=null,area=fragment.get('area')||null;
 try{
  if(fragment.has('token')||fragment.has('profile')){
   if(validReference(grantReference))sessionStorage.removeItem(grantPrefix+grantReference);
   const nextToken=fragment.get('token'),nextProfile=fragment.get('profile');
   if(nextToken&&nextProfile){
    const reference=crypto.randomUUID();
-   sessionStorage.setItem(grantPrefix+reference,JSON.stringify({token:nextToken,profile:nextProfile}));
+   sessionStorage.setItem(grantPrefix+reference,JSON.stringify({token:nextToken,profile:nextProfile,area}));
    history.replaceState({managementGrant:reference},'',location.pathname);
    token=nextToken;profile=nextProfile;
   }else history.replaceState(null,'',location.pathname);
  }else if(validReference(grantReference)&&(navigationType==='reload'||navigationType==='back_forward')){
   const saved=JSON.parse(sessionStorage.getItem(grantPrefix+grantReference));
-  if(saved&&typeof saved.token==='string'&&saved.token&&typeof saved.profile==='string'&&saved.profile){token=saved.token;profile=saved.profile;}
+  if(saved&&typeof saved.token==='string'&&saved.token&&typeof saved.profile==='string'&&saved.profile){token=saved.token;profile=saved.profile;area=saved.area||null;}
   history.replaceState(token?{managementGrant:grantReference}:null,'',location.pathname);
  }else history.replaceState(null,'',location.pathname);
 }catch{
  token=null;profile=null;history.replaceState(null,'',location.pathname);
 }
 let authorized=Boolean(token&&profile);
-const byId=id=>document.getElementById(id);let loginTimer=null,pollBusy=false,loginEpoch=0,termsReady=false;
+const byId=id=>document.getElementById(id);let loginTimer=null,pollBusy=null,loginEpoch=0,termsReady=false;
 byId('client').textContent='当前调用端：'+(profile||'未指定');
-if(!authorized){byId('authorization-notice').hidden=false;document.querySelectorAll('input,button').forEach(element=>{element.disabled=true;});}
+if(!authorized){byId('authorization-notice').hidden=false;document.querySelectorAll('input,button,select').forEach(element=>{element.disabled=true;});}
 function message(text){byId('message').textContent=text;}
 function invalidateAuthorization(){
  authorized=false;token=null;profile=null;loginEpoch++;stopPolling();
+ message('此管理页面授权已失效，请通过连接器重新打开。');
  try{const reference=history.state?.managementGrant;if(validReference(reference))sessionStorage.removeItem(grantPrefix+reference);}catch{}
  history.replaceState(null,'',location.pathname);
  byId('client').textContent='当前调用端：未指定';byId('authorization-notice').hidden=false;
  byId('login-area').hidden=false;byId('connected-area').hidden=true;byId('account-form').hidden=false;byId('code-form').hidden=true;byId('cancel-login').hidden=true;
  byId('password').value='';byId('code').value='';
- document.querySelectorAll('input,button').forEach(element=>{element.disabled=true;});
+ document.querySelectorAll('input,button,select').forEach(element=>{element.disabled=true;});
 }
 async function api(action,body={}){
  if(!token||!profile)throw Error('此管理页面没有有效授权，请通过连接器重新打开。');
- const response=await fetch('/manage/'+action,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({profile,...body}),credentials:'omit',redirect:'error'});
+ const response=await fetch('/manage/'+action,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({profile,...body,...(area?{area}:{})}),credentials:'omit',redirect:'error'});
  if(response.status===401){invalidateAuthorization();throw Error('此管理页面授权已失效，请通过连接器重新打开。');}
  const result=await response.json();if(!authorized)throw Error('此管理页面授权已失效，请通过连接器重新打开。');if(!response.ok||result.ok===false)throw Error(result.error?.message||'组件调用失败');return result;
 }
@@ -103,11 +105,28 @@ async function run(action){try{await action();}catch(error){message(error.messag
 const stateNames={disconnected:'未连接',login_pending:'正在登录',saved_unverified:'登录资料已保存，等待核验',connected:'已连接'};
 const activeLogin=new Set(['starting','logging_in','need_code','verifying','notice_pending']);
 function stopPolling(){if(loginTimer)clearInterval(loginTimer);loginTimer=null;}
+async function loadArea(){
+ const epoch=loginEpoch;let result;try{result=await api('login-options');}catch(error){if(epoch===loginEpoch)throw error;return;}if(epoch!==loginEpoch||!authorized)return;
+ area=result.area||result.platform||area||'erp';
+ if(!['erp','drp'].includes(area))throw Error('业务板块无效，请重新打开连接授权页。');
+ const available=result.areas||[area];for(const option of byId('business-area').options)option.disabled=!available.includes(option.value);
+ byId('business-area').value=area;byId('business-area').disabled=available.length<2;
+ byId('erp-connect').hidden=!result.erp_sso_available;
+ for(const [id,key]of [['agreement','agreement_url'],['privacy','privacy_url']]){const target=new URL(result.terms[key]);if(target.protocol!=='https:')throw Error('登录协议地址无效，请更新组件。');byId(id).href=target.href;}
+ try{const reference=history.state?.managementGrant;if(validReference(reference))sessionStorage.setItem(grantPrefix+reference,JSON.stringify({token,profile,area}));}catch{}
+ termsReady=true;await refresh();
+}
+byId('business-area').onchange=()=>run(async()=>{
+ loginEpoch++;stopPolling();area=byId('business-area').value;termsReady=false;byId('business-area').disabled=true;
+ byId('password').value='';byId('code').value='';byId('username').value='';byId('remember').checked=false;byId('terms').checked=false;
+ byId('login-area').hidden=false;byId('connected-area').hidden=true;byId('account-form').hidden=true;byId('code-form').hidden=true;byId('cancel-login').hidden=true;
+ byId('erp-connect').hidden=true;byId('login-progress').textContent='正在检查所选板块的本人连接…';await loadArea();
+});
 window.addEventListener('hashchange',()=>{
  // A newly opened grant may reuse this tab without a document navigation.
  // Stop old requests/UI immediately, then let the entry parser consume the new hash.
  authorized=false;token=null;profile=null;loginEpoch++;stopPolling();
- document.querySelectorAll('input,button').forEach(element=>{element.disabled=true;});
+ document.querySelectorAll('input,button,select').forEach(element=>{element.disabled=true;});
  location.reload();
 });
 function showLogin(state){
@@ -127,17 +146,17 @@ function showLogin(state){
  if(active){if(!loginTimer)loginTimer=setInterval(()=>run(pollLogin),2000);}else stopPolling();
  if(connected)run(refreshConnection);
 }
-async function pollLogin(){if(pollBusy)return;pollBusy=true;const epoch=loginEpoch;try{const result=await api('login-status');if(epoch===loginEpoch)showLogin(result.login);}catch(error){if(epoch===loginEpoch){stopPolling();throw error;}}finally{pollBusy=false;}}
-async function refreshConnection(){const epoch=loginEpoch,result=await api('status');if(epoch!==loginEpoch||!authorized)return;const state=result.connection,display=state.identity_display;message((state.message||'')+'\n连接状态：'+(stateNames[state.status]||'状态待核对')+(display?.company_name&&display?.user_name?'\n公司：'+display.company_name+'；员工：'+display.user_name:state.identity?'\n公司编号：'+state.identity.company_id+'；员工编号：'+state.identity.user_id:''));byId('login').disabled=state.status==='connected';}
+async function pollLogin(){const epoch=loginEpoch;if(pollBusy===epoch)return;pollBusy=epoch;try{const result=await api('login-status');if(epoch===loginEpoch)showLogin(result.login);}catch(error){if(epoch===loginEpoch){stopPolling();throw error;}}finally{if(pollBusy===epoch)pollBusy=null;}}
+async function refreshConnection(){const epoch=loginEpoch;try{const result=await api('status');if(epoch!==loginEpoch||!authorized)return;const state=result.connection,display=state.identity_display;message((state.message||'')+'\n连接状态：'+(stateNames[state.status]||'状态待核对')+(display?.company_name&&display?.user_name?'\n公司：'+display.company_name+'；员工：'+display.user_name:state.identity?'\n公司编号：'+state.identity.company_id+'；员工编号：'+state.identity.user_id:''));byId('login').disabled=state.status==='connected';}catch(error){if(epoch===loginEpoch)throw error;}}
 async function refresh(){await refreshConnection();await pollLogin();}
 byId('refresh').onclick=()=>run(refresh);
 byId('login').onclick=()=>run(pollLogin);
-byId('erp-connect').onclick=()=>run(async()=>{const epoch=++loginEpoch;byId('erp-connect').disabled=true;message('正在核验已配对的ERP并接续分销…');try{const result=await api('login-from-erp');if(epoch===loginEpoch)showLogin(result.login);}finally{byId('erp-connect').disabled=false;}});
+byId('erp-connect').onclick=()=>run(async()=>{const epoch=++loginEpoch;byId('erp-connect').disabled=true;message('正在核验本人的ERP并接续分销…');try{const result=await api('login-from-erp');if(epoch===loginEpoch)showLogin(result.login);}catch(error){if(epoch===loginEpoch)throw error;}finally{if(epoch===loginEpoch)byId('erp-connect').disabled=false;}});
 byId('account-form').onsubmit=event=>{event.preventDefault();run(async()=>{const epoch=++loginEpoch;byId('password-submit').disabled=true;const password=byId('password').value;byId('password').value='';try{const result=await api('login-password',{username:byId('username').value.trim(),password,remember:byId('remember').checked,terms_accepted:byId('terms').checked});if(epoch===loginEpoch)showLogin(result.login);}catch(error){if(epoch===loginEpoch)throw error;}finally{if(epoch===loginEpoch)byId('password-submit').disabled=!termsReady||byId('account-form').hidden;}});};
 byId('send-code').onclick=()=>run(async()=>{const epoch=++loginEpoch;byId('send-code').disabled=true;try{const result=await api('login-send-code');if(epoch===loginEpoch)showLogin(result.login);}catch(error){if(epoch===loginEpoch){await pollLogin();throw error;}}});
 byId('code-form').onsubmit=event=>{event.preventDefault();run(async()=>{const epoch=++loginEpoch,code=byId('code').value;byId('code').value='';byId('submit-code').disabled=true;try{const result=await api('login-submit-code',{code});if(epoch===loginEpoch)showLogin(result.login);}catch(error){if(epoch===loginEpoch){await pollLogin();throw error;}}});};
 byId('cancel-login').onclick=()=>run(async()=>{const epoch=++loginEpoch;const result=await api('login-cancel');if(epoch===loginEpoch)showLogin(result.login);});
 byId('logout').onclick=()=>run(async()=>{if(!confirm('退出当前调用端账号并清除其登录资料？'))return;const epoch=++loginEpoch;await api('logout');if(epoch!==loginEpoch)return;stopPolling();byId('password').value='';byId('code').value='';byId('username').value='';byId('remember').checked=false;await refresh();});
-if(authorized)run(async()=>{const result=await api('login-options');if(result.platform_name){document.title=result.platform_name+'连接授权';document.querySelector('.brand-name').textContent=result.platform_name+'连接器';}byId('erp-connect').hidden=!result.erp_sso_available;for(const [id,key]of [['agreement','agreement_url'],['privacy','privacy_url']]){const target=new URL(result.terms[key]);if(target.protocol!=='https:')throw Error('登录协议地址无效，请更新组件。');byId(id).href=target.href;}termsReady=true;await refresh();});
+if(authorized)run(loadArea);
 else message('此管理页面没有有效授权，请通过连接器重新打开。');
 </script></body></html>

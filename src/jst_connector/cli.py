@@ -25,7 +25,7 @@ def _write_config(root: Path, client: str, kind: str, remote_url: str | None = N
     args = ["-m", "jst_connector", "mcp", "--client", client, "--data-dir", str(root)]
     if platform != "erp":
         args.extend(["--platform", platform])
-    connector_name = "jushuitan-drp" if platform == "drp" else "jushuitan"
+    connector_name = "jushuitan"
     if remote_url:
         from .remote_client import public_origin
         args.extend(["--remote-url", public_origin(remote_url)])
@@ -65,7 +65,7 @@ def main(argv=None):
         part = sub.add_parser(command)
         part.add_argument("--data-dir", type=Path)
         part.add_argument("--platform", choices=("erp", "drp"), default="erp",
-                          help="erp=聚水潭ERP；drp=聚水潭分销。两者使用独立运行目录和授权。")
+                          help="默认单入口兼容ERP和分销；drp仅用于兼容旧分销单板块部署，无须另配第二连接器。")
         if command in ("init", "mcp", "open", "status", "catalog", "config"):
             part.add_argument("--client", default="codex", type=_client_argument)
         if command == "serve":

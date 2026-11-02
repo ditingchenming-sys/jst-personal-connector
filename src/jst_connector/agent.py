@@ -32,6 +32,9 @@ async def dispatch_action(service, profile, action, body, *, manager_opener=None
     """本机与远程共用业务分派；profile只能由各传输层的可信授权派生。"""
     if not isinstance(body, dict):
         raise ConnectorError("invalid_request", "请求必须是 JSON 对象。")
+    service = service.area_service(body.get("area"))
+    body = dict(body)
+    body.pop("area", None)  # Transport metadata; nested business parameters remain intact.
     if action == "status":
         return await service.status(profile)
     if action == "catalog":
@@ -79,7 +82,7 @@ def create_app(service: ConnectorService, *, opener=webbrowser.open) -> FastAPI:
         async def idle_cleanup():
             while True:
                 await asyncio.sleep(30)
-                await service.browser.close_idle()
+                await service.close_idle()
         cleanup = asyncio.create_task(idle_cleanup())
         try:
             yield
@@ -137,12 +140,18 @@ def create_app(service: ConnectorService, *, opener=webbrowser.open) -> FastAPI:
         body = await request.json()
         if not isinstance(body, dict):
             raise ConnectorError("invalid_request", "请求必须是 JSON 对象。")
+        # Historical tools may send identity hints. They never select the actor:
+        # only the root authorization above supplies profile to the child.
+        if any(key in body for key in ("platform", "source_profile", "source_identity", "source_root",
+                                       "erp_profile", "erp_data_dir", "token")):
+            raise ConnectorError("identity_parameter_rejected", "调用身份与登录来源由连接授权解析，不能通过请求指定。")
+        target = service.area_service(body.get("area"))
         if action == "open-manager":
-            fragment = urlencode({"profile": profile, "token": service.vault.manager_token()})
+            fragment = urlencode({"profile": profile, "token": service.vault.manager_token(), "area": target.platform})
             opened = await asyncio.to_thread(opener, str(request.base_url) + "ui#" + fragment)
             return {"ok": bool(opened), "message": "已请求打开本人登录授权页；连接完成后可关闭，回到AI或业务系统继续使用。"}
         if action == "open-confirmation":
-            return await confirmation.open(profile, body["preview_id"], body["digest"], str(request.base_url))
+            return await confirmation.open(profile, body["preview_id"], body["digest"], str(request.base_url), area=target.platform)
         return await dispatch_action(service, profile, action, body)
 
     @app.post("/manage/{action}")
@@ -152,40 +161,43 @@ def create_app(service: ConnectorService, *, opener=webbrowser.open) -> FastAPI:
         if not isinstance(body, dict):
             raise ConnectorError("invalid_request", "请求必须是 JSON 对象。")
         profile = profile_name(body.get("profile", ""))
+        if any(key in body for key in ("company_id", "user_id", "employee_id", "platform", "source_profile",
+                                       "source_identity", "source_root", "erp_profile", "erp_data_dir", "token")):
+            raise ConnectorError("identity_parameter_rejected", "账号身份和ERP接续来源由可信连接解析，不能通过请求指定。")
+        target = service.area_service(body.get("area"))
         if action == "status":
-            return await service.status(profile)
+            return await target.status(profile)
         if action == "login-options":
-            return service.login_options(profile)
+            return service.area_login_options(profile, body.get("area"))
         if action == "login-from-erp":
-            from .erp_sso import connect_from_erp
-            return await connect_from_erp(service, profile)
+            return await service.connect_area_from_erp(profile, area=target.platform)
         if action == "identity-evidence":
             from .identity_probe import inspect_identity_sources
-            return {"ok": True, "evidence": await inspect_identity_sources(service.browser, profile)}
+            return {"ok": True, "evidence": await inspect_identity_sources(target.browser, profile)}
         if action == "current-user-evidence":
             from .identity_probe import inspect_current_user_source
-            return {"ok": True, "evidence": await inspect_current_user_source(service.browser, profile)}
+            return {"ok": True, "evidence": await inspect_current_user_source(target.browser, profile)}
         if action == "login-password":
-            login = await service.browser.password_login(
+            login = await target.browser.password_login(
                 profile, body.get("username", ""), body.get("password", ""),
                 remember=body.get("remember") is True, terms_accepted=body.get("terms_accepted") is True,
             )
             return {"ok": True, "login": login}
         if action == "login-status":
-            return {"ok": True, "login": await service.browser.login_status(profile)}
+            return {"ok": True, "login": await target.browser.login_status(profile)}
         if action == "login-send-code":
-            return {"ok": True, "login": await service.browser.send_login_code(profile)}
+            return {"ok": True, "login": await target.browser.send_login_code(profile)}
         if action == "login-submit-code":
-            return {"ok": True, "login": await service.browser.submit_login_code(profile, body.get("code", ""))}
+            return {"ok": True, "login": await target.browser.submit_login_code(profile, body.get("code", ""))}
         if action == "login-cancel":
-            return {"ok": True, "login": await service.browser.cancel_login(profile)}
+            return {"ok": True, "login": await target.browser.cancel_login(profile)}
         if action == "logout":
-            await service.browser.logout(profile)
+            await target.browser.logout(profile)
             return {"ok": True, "message": "已退出该调用端账号并清除其登录资料。"}
         if action == "preview-status":
-            return {"ok": True, "preview": service.ledger.get_preview(profile, body["preview_id"])}
+            return {"ok": True, "preview": target.ledger.get_preview(profile, body["preview_id"])}
         if action == "approve":
-            return service.approve(profile, body["preview_id"], body["digest"])
+            return target.approve(profile, body["preview_id"], body["digest"])
         raise ConnectorError("unsupported_action", "不支持此管理动作。")
 
     return app

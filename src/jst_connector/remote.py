@@ -235,7 +235,7 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
         async def cleanup():
             while True:
                 await asyncio.sleep(30)
-                await service.browser.close_idle()
+                await service.close_idle()
         task = asyncio.create_task(cleanup())
         try:
             yield
@@ -286,7 +286,8 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
             raise ConnectorError("invalid_request", "请求须为有效的 JSON 对象。") from None
         if not isinstance(body, dict):
             raise ConnectorError("invalid_request", "请求须为 JSON 对象。")
-        if any(key in body for key in ("profile", "company_id", "user_id", "employee_id")):
+        if any(key in body for key in ("profile", "company_id", "user_id", "employee_id", "platform", "source_profile",
+                                       "source_identity", "source_root", "erp_profile", "erp_data_dir", "token")):
             raise ConnectorError("identity_parameter_rejected", "操作身份由员工授权解析，不能通过请求指定。")
         return body
 
@@ -314,7 +315,8 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
         if request.cookies.get(COOKIE):
             employees.logout(request.cookies[COOKIE])
         response = JSONResponse({"ok": True, "username": session["username"], "client": session["client"],
-                                 "connection_id": session["connection_id"], "csrf": session["csrf"]})
+                                 "connection_id": session["connection_id"], "csrf": session["csrf"],
+                                 "default_area": service.platform, "areas": ["erp", "drp"] if service.platform == "erp" else ["drp"]})
         response.set_cookie(COOKIE, token, max_age=SESSION_TTL, secure=True, httponly=True, samesite="strict", path="/")
         return response
 
@@ -322,7 +324,8 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
     async def session_status(request: Request):
         session = employee_session(request)
         return {"ok": True, "username": session["username"], "client": session["client"], "csrf": session["csrf"],
-                "connection_id": session["connection_id"]}
+                "connection_id": session["connection_id"], "default_area": service.platform,
+                "areas": ["erp", "drp"] if service.platform == "erp" else ["drp"]}
 
     @app.post("/portal/logout")
     async def employee_logout(request: Request):
@@ -337,27 +340,27 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
         session = employee_session(request, csrf=True)
         profile = session["profile"]
         body = await body_json(request)
+        target = service.area_service(body.get("area"))
         if action == "status":
-            return await service.status(profile)
+            return await target.status(profile)
         if action == "login-options":
-            return service.login_options(profile)
+            return service.area_login_options(profile, body.get("area"))
         if action == "login-from-erp":
-            from .erp_sso import connect_from_erp
-            return await connect_from_erp(service, profile)
+            return await service.connect_area_from_erp(profile, area=target.platform)
         if action == "login-password":
-            result = await service.browser.password_login(profile, body.get("username", ""), body.get("password", ""),
+            result = await target.browser.password_login(profile, body.get("username", ""), body.get("password", ""),
                                                           remember=body.get("remember") is True,
                                                           terms_accepted=body.get("terms_accepted") is True)
         elif action == "login-status":
-            result = await service.browser.login_status(profile)
+            result = await target.browser.login_status(profile)
         elif action == "login-send-code":
-            result = await service.browser.send_login_code(profile)
+            result = await target.browser.send_login_code(profile)
         elif action == "login-submit-code":
-            result = await service.browser.submit_login_code(profile, body.get("code", ""))
+            result = await target.browser.submit_login_code(profile, body.get("code", ""))
         elif action == "login-cancel":
-            result = await service.browser.cancel_login(profile)
+            result = await target.browser.cancel_login(profile)
         elif action == "logout":
-            await service.browser.logout(profile)
+            await target.browser.logout(profile)
             return {"ok": True, "message": "已清除本员工本调用端的聚水潭登录资料。"}
         else:
             raise ConnectorError("unsupported_action", "此页面只提供本人登录授权与连接管理。")
@@ -374,13 +377,14 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
     async def operation(request: Request):
         session = employee_session(request, csrf=True)
         body = await body_json(request)
-        return {"ok": True, "preview": service.ledger.get_preview(session["profile"], body.get("preview_id", ""))}
+        target = service.area_service(body.get("area"))
+        return {"ok": True, "preview": target.ledger.get_preview(session["profile"], body.get("preview_id", "")), "area": target.platform}
 
     @app.post("/portal/approve")
     async def approve(request: Request):
         session = employee_session(request, csrf=True)
         body = await body_json(request)
-        return service.approve(session["profile"], body.get("preview_id", ""), body.get("digest", ""))
+        return service.area_service(body.get("area")).approve(session["profile"], body.get("preview_id", ""), body.get("digest", ""))
 
     @app.post("/api/{action}")
     async def api(action: str, request: Request):
@@ -390,17 +394,20 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
         identity = employees.bearer(header[7:] if header.startswith("Bearer ") else "")
         body = await body_json(request)
         profile = identity["profile"]
+        target = service.area_service(body.get("area"))
         if action == "open-manager":
             url = origin + "/login?connection=" + quote(identity["connection_id"], safe="")
+            if target.platform == "drp":
+                url += "&area=drp"
             return {"ok": True, "url": url, "message": "请在自己的浏览器打开此网址，登录本人员工账号后连接聚水潭。完成后可关闭。"}
         if action == "open-confirmation":
-            record = service.ledger.get_preview(profile, body.get("preview_id", ""))
+            record = target.ledger.get_preview(profile, body.get("preview_id", ""))
             if record["status"] != "ready" or record["digest"] != body.get("digest"):
                 raise ConnectorError("confirmation_invalid", "预览已变化或已确认，请先查询同一操作状态。")
             if time.time() >= record["expires_at"]:
                 raise ConnectorError("preview_expired", "预览已过期，请重新预览。")
             return {"ok": True, "url": origin + "/operations/" + quote(record["preview_id"], safe="")
-                    + "?connection=" + quote(identity["connection_id"], safe=""),
+                    + "?connection=" + quote(identity["connection_id"], safe="") + "&area=" + target.platform,
                     "message": "请在本人已登录的浏览器核对完整预览并确认，确认后回到 AI 执行。"}
         if action in {"approve", "login-password", "login-send-code", "login-submit-code", "logout"}:
             raise ConnectorError("unsupported_action", "此动作须由本人授权页面或可信系统执行。")
@@ -408,7 +415,7 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
         if handler is None:
             from .agent import dispatch_action
             handler = dispatch_action
-        return await handler(service, profile, action, body, manager_opener=None, base_url=origin)
+        return await handler(target, profile, action, body, manager_opener=None, base_url=origin)
 
     return app
 

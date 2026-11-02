@@ -7,28 +7,28 @@
       "sha256": "b98373f10990771d52fc8e8fa836d44f7b448203b5e38acfd434a13feba9c81f"
     },
     "AI接入说明.md": {
-      "size": 5839,
-      "sha256": "9ca7f6372f5e432797e2719b68dbfdc61142bef9413298f2805efba1b6ec6136"
+      "size": 5803,
+      "sha256": "8d684b76ea3943cc2028ed0ab13b2a5d468efa2749f9ef8a5d4fc27023b2461b"
     },
     "Dockerfile.test": {
       "size": 614,
       "sha256": "63570df9492891c342c1264acb12d04db2bc3340a6d81485f115a2f0c3faf14c"
     },
     "INSTALL.md": {
-      "size": 12676,
-      "sha256": "0fe65fa9f82d0f932b562b9e058abd74e9fe5ab5502a8bb71d28d92fe8e985e0"
+      "size": 13164,
+      "sha256": "cbff0a00546a6f94f083109a06b95c7a070e31ca612394fc240d7d5a09ab370a"
     },
     "LICENSE": {
       "size": 1096,
       "sha256": "8b3e133cfc7bbc0db0096914a39c38560c4763509191fc478ca268560c924953"
     },
     "README.md": {
-      "size": 4954,
-      "sha256": "1c6633a2a8fe93d27cfece8fe3d8a47fed14762267ff0880d16ccf466bd9fdac"
+      "size": 5198,
+      "sha256": "6f93a9dad62c76b4caf276307fd3ece1c78e7019729c6d4b5a0ddef0c63a7052"
     },
     "docs/通用探索与接口复用.md": {
-      "size": 5089,
-      "sha256": "f98f2c2f857fd6843c04960ea458442b357d17bdc2c6403232c0702dea273432"
+      "size": 5393,
+      "sha256": "041e390d993678b771555bb6bd03813706a38059581428926aa968bba8ab4938"
     },
     "examples/system_integration.py": {
       "size": 2329,
@@ -36,7 +36,7 @@
     },
     "pyproject.toml": {
       "size": 1113,
-      "sha256": "980cd8afbb9001486e827fe39e99f62a19b58323300f49df537433d74a5cd55e"
+      "sha256": "61b1735259d9463fc92a3820aab174c72e2a51dd9d43984b274abffa2ba2f0f5"
     },
     "requirements.lock.txt": {
       "size": 48658,
@@ -56,15 +56,15 @@
     },
     "src/jst_connector/__init__.py": {
       "size": 58,
-      "sha256": "7a075cfa5c59d8844b84c14592dcd7883e0e5bfea372cc9ad8764ae56d251e00"
+      "sha256": "c2242ad64ab142048332a7d374ba6e60d418b508c25f9a3c69f2aef8553085e3"
     },
     "src/jst_connector/__main__.py": {
       "size": 30,
       "sha256": "6d8b7d7846a845059d7a3107143f11131f63c5511d669b44085b15ec5e3d2279"
     },
     "src/jst_connector/adapters/SOURCES.md": {
-      "size": 2867,
-      "sha256": "46f796fb747a7a06a71ced6b0443378a4c8ed388d707c8f9494c793bbfeecaa7"
+      "size": 3158,
+      "sha256": "d2e10278e28e59f33e6098312f06527f71a6fd0bc31287e798849e9754fc764b"
     },
     "src/jst_connector/adapters/__init__.py": {
       "size": 1798,
@@ -75,8 +75,8 @@
       "sha256": "49b871b4ec6a44063375765add699feda145662a1a4200fcdc592c1ec4e77c73"
     },
     "src/jst_connector/agent.py": {
-      "size": 11270,
-      "sha256": "b6e101c77d5bfc833880d786ee79b71a109f56d64076b4c59f4519a1e8cb0566"
+      "size": 12435,
+      "sha256": "3dacbee915ef97b345df57649be3dbbe023f23837aa8f8fd2fd9bd299939d85c"
     },
     "src/jst_connector/auth_receipt.py": {
       "size": 5576,
@@ -91,8 +91,8 @@
       "sha256": "7d99ac75553506c3bdbf7d8b6f597d3cdbddad8203ef04c48d09db7b0f71b25a"
     },
     "src/jst_connector/cli.py": {
-      "size": 14474,
-      "sha256": "92002795ef28d7947cef364c54c1b97d067852196d90210d9af94d63762adfca"
+      "size": 14460,
+      "sha256": "4066b0d84f7ca99d210cb5adffe23026f208e24d80066925419b4a74319ff50a"
     },
     "src/jst_connector/client.py": {
       "size": 4486,
@@ -115,8 +115,8 @@
       "sha256": "8a4c5f356c48e38be41e62080517211f666076f89b99898ee5939f2ef22aacf5"
     },
     "src/jst_connector/erp_sso.py": {
-      "size": 6605,
-      "sha256": "5ecc50d2e3ec6e071d41c42dd1c28107a5a3a81d7c7e8cdc582cba11337fa369"
+      "size": 6851,
+      "sha256": "3e17b22d7bbd42bfce734c655bcff861233e3982ddca072ab6c9ca4fc36ca254"
     },
     "src/jst_connector/errors.py": {
       "size": 424,
@@ -139,24 +139,24 @@
       "sha256": "69bf4ed39e9167bf27809c0cc61df23ce0606ee21f2b3f89f18fbec5878f43b9"
     },
     "src/jst_connector/local_confirmation.py": {
-      "size": 3259,
-      "sha256": "0a0648a50356a4ae1022b6cfb3f30373320dd78d5430ad13d4c3acb479c3fdc5"
+      "size": 4140,
+      "sha256": "c3c3991db9dc390df641b3c7600a5303650c3832a67f1a486faf1cb7a03ad711"
     },
     "src/jst_connector/login_flow.py": {
       "size": 26800,
       "sha256": "a706cfab33d643be1d1c142a23ee5b06fe0eaa2c9af6855f6ea5409105cf9b2d"
     },
     "src/jst_connector/management.html": {
-      "size": 21341,
-      "sha256": "56620a46b56df26501ab95f594547c3033cbfae3315fcb249508d70142a5ba7b"
+      "size": 23207,
+      "sha256": "18971ec6769b1006a433d7c65582877fe15d79d299df689283d4515c7e10ec98"
     },
     "src/jst_connector/mcp_server.py": {
-      "size": 12114,
-      "sha256": "77f0060b1421604d245e422aa05915ec033aea9dc833288130392d7299cf8ed5"
+      "size": 13664,
+      "sha256": "e0838638a3acb51c26b10e52232238917f9cceda9630c1fdbe654369c1068ea2"
     },
     "src/jst_connector/operation_confirmation.html": {
-      "size": 3042,
-      "sha256": "04cb9e1e4f8827392eced3a7e3a6f6656921d1d32abb77c2254fcb3cc6d8f7e5"
+      "size": 3184,
+      "sha256": "15cf2b5c14468f56ec16d33a7d3473a686abaf80f673a67baddeaeb51c1eef0d"
     },
     "src/jst_connector/platform_policy.py": {
       "size": 5053,
@@ -167,24 +167,24 @@
       "sha256": "ac141248418ab965bed3499b71b95be23b07e2561a0d370969ae17a95d69db19"
     },
     "src/jst_connector/remote.py": {
-      "size": 22815,
-      "sha256": "66b402afc458981b384ce3c9798a0afa78effd29ca90d97f8c049db2080483da"
+      "size": 23519,
+      "sha256": "d43f21367b30dd45ed655b8fc848fdcb8c917a4cae341a8e221d2dbecc5950d4"
     },
     "src/jst_connector/remote_client.py": {
       "size": 3343,
       "sha256": "6c7981ba30329ca5ef9eb9553e55100cc7b147dacc9d41aede153afc02ccf1b5"
     },
     "src/jst_connector/remote_confirmation.html": {
-      "size": 3519,
-      "sha256": "6bbe68b0682be3e5fd1b2c4a8c073f4e94a0b3f996e8b83491016f6da3359e45"
+      "size": 3745,
+      "sha256": "8b21db8e0279c188c210016c0a06c7d04b5bf72dc2d9cabd3112579e33517a8d"
     },
     "src/jst_connector/remote_login.html": {
-      "size": 10353,
-      "sha256": "f2e21c327698b3435f67a7fa5e810ee73f6115b98676a04fdcda2c24dc99fd48"
+      "size": 12740,
+      "sha256": "2b76a94d2b810d733f20d1330dc2f7e228f49fe37ff7c471d136ad9502d6a104"
     },
     "src/jst_connector/service.py": {
-      "size": 13622,
-      "sha256": "1ad505ec2a4980495a114e6f1e936af04a7b9bb5263db9629fe4b34b3c779dde"
+      "size": 19522,
+      "sha256": "cb86c169d09958d0d446f2726c5345adb7ce8dfe1ebad3c542aef06854a73e8a"
     },
     "src/jst_connector/system_runner.py": {
       "size": 15050,
@@ -243,8 +243,8 @@
       "sha256": "818b4527221064913b9977868fee5997a9d1786731446c9ca7ea38b9babc68d8"
     },
     "tests/test_generic_mcp_contract.py": {
-      "size": 2459,
-      "sha256": "5e95118fa37ad2a1376feef9fedf98cd6c03230c6c86263b2b3f0848f8d81f44"
+      "size": 2949,
+      "sha256": "a79bdc6820e33da55a88e5650dc011957547da6770a8deb0b4103fe0c2b53a96"
     },
     "tests/test_generic_write.py": {
       "size": 24801,
@@ -287,8 +287,8 @@
       "sha256": "36ecfb2bc3eb74cd24c5e131a02907e824c5af0bab447eaf9446d0289c6126b7"
     },
     "tests/test_platform_isolation.py": {
-      "size": 5351,
-      "sha256": "2627a5adf73177fcefac922127cf153f04b1e5bdd4692f96b9e69ca083153b92"
+      "size": 5416,
+      "sha256": "5b70cbf581dfcf0b1e08e40a50883bb61a12f398bce7140e55bddac523d12eec"
     },
     "tests/test_platform_policy.py": {
       "size": 14184,
@@ -306,13 +306,21 @@
       "size": 18085,
       "sha256": "233f50b73245ff483f09f856d84b5e4bb7bb316ecdba71f0a627eebf83a5f78c"
     },
+    "tests/test_unified_service.py": {
+      "size": 13974,
+      "sha256": "dc4b30ad01d0f0f45a795b4f77a6085cde4d3e3779e00629076846ede39cdc7c"
+    },
+    "tests/test_unified_transport.py": {
+      "size": 22661,
+      "sha256": "1f6cf167e8d1a4f94d854def0b0577ea74b98400c9c033311bbe17e9ea510b73"
+    },
     "tests/test_vault_ledger.py": {
       "size": 11702,
       "sha256": "29d2fef5a63307ba9ef4b19a74d223c6c93c7760e72c0299ffff1c46092cd915"
     },
     "uv.lock": {
       "size": 195488,
-      "sha256": "208f2ff92baf855def93025ecf9d06ae35539c016d59db804909649d8b42a494"
+      "sha256": "f197d28309aaaa08314e0c5a49470f628038a17e9e2a02c6731c412a3d24aa89"
     }
   }
 }
