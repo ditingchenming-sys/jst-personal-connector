@@ -21,6 +21,7 @@ from filelock import FileLock, Timeout
 from . import __version__
 from .config import profile_name
 from .errors import ConnectorError
+from .platform_auth import CHALLENGE_COOKIE, FLOW_TTL, PlatformRegistry
 from .remote_client import public_origin
 from .service import ConnectorService
 from .vault import Vault
@@ -155,6 +156,12 @@ class EmployeeStore:
             if self.vault.unseal(row["encrypted"])["username"] == username:
                 conn.execute("DELETE FROM browser_sessions WHERE id=?", (row["id"],))
 
+    def _revoke_connection_sessions(self, conn, username, connection_id):
+        for row in conn.execute("SELECT id,encrypted FROM browser_sessions").fetchall():
+            session = self.vault.unseal(row["encrypted"])
+            if session["username"] == username and session["connection_id"] == connection_id:
+                conn.execute("DELETE FROM browser_sessions WHERE id=?", (row["id"],))
+
     def bearer(self, token):
         if not isinstance(token, str) or not re.fullmatch(r"jst_remote_[A-Za-z0-9_-]{43}", token):
             raise ConnectorError("unauthorized", "员工调用授权无效或已撤销。")
@@ -165,6 +172,8 @@ class EmployeeStore:
                 if employee["enabled"]:
                     for connection in employee["connections"]:
                         if hmac.compare_digest(connection["token_hash"], target):
+                            if employee.get("auth_method") == "platform" and not PlatformRegistry.external_current(conn, self.vault, employee, connection):
+                                continue
                             return {"username": employee["username"], **connection}
         raise ConnectorError("unauthorized", "员工调用授权无效或已撤销。")
 
@@ -190,22 +199,32 @@ class EmployeeStore:
             self._limit(conn, "account:" + username, 8, 300)
         with self._connection(write=True) as conn:
             employee = self._employee(conn, username)
-            salt = employee["salt"] if employee else "0" * 32
+            salt = employee.get("salt", "0" * 32) if employee else "0" * 32
             checked = _password(password, salt)
-            if not employee or not employee["enabled"] or not hmac.compare_digest(checked, employee["password_hash"]):
+            if (not employee or not employee["enabled"] or employee.get("auth_method") == "platform"
+                    or not hmac.compare_digest(checked, employee.get("password_hash", ""))):
                 raise ConnectorError("unauthorized", "员工账号、密码或连接无效。")
             connection = next((c for c in employee["connections"] if c["connection_id"] == connection_id), None)
             if connection_id is None and len(employee["connections"]) == 1:
                 connection = employee["connections"][0]
             if connection is None:
                 raise ConnectorError("unauthorized", "请通过本调用端提供的登录网址打开，员工账号须与该连接匹配。")
-            token = secrets.token_urlsafe(32)
-            record = {"username": username, "connection_id": connection["connection_id"],
-                      "profile": connection["profile"], "client": connection["client"],
-                      "csrf": secrets.token_urlsafe(32), "expires_at": time.time() + SESSION_TTL}
-            conn.execute("DELETE FROM browser_sessions WHERE expires < ?", (time.time(),))
-            conn.execute("INSERT INTO browser_sessions VALUES (?,?,?)",
-                         (_hash(token), self.vault.seal(record), record["expires_at"]))
+            token, record = self._create_browser_session(conn, employee, connection)
+        return token, record
+
+    def _create_browser_session(self, conn, employee, connection, *, auth_method="password", generation=None):
+        token = secrets.token_urlsafe(32)
+        record = {"username": employee["username"], "connection_id": connection["connection_id"],
+                  "profile": connection["profile"], "client": connection["client"],
+                  "csrf": secrets.token_urlsafe(32), "expires_at": time.time() + SESSION_TTL,
+                  "auth_method": auth_method, "auth_mode": auth_method,
+                  "display_name": employee.get("display_name", employee["username"])}
+        if auth_method == "platform":
+            record.update(issuer=employee["external"]["issuer"], platform_generation=generation,
+                          connection_hash=connection["token_hash"])
+        conn.execute("DELETE FROM browser_sessions WHERE expires < ?", (time.time(),))
+        conn.execute("INSERT INTO browser_sessions VALUES (?,?,?)",
+                     (_hash(token), self.vault.seal(record), record["expires_at"]))
         return token, record
 
     def session(self, token):
@@ -217,7 +236,14 @@ class EmployeeStore:
                 record = self.vault.unseal(row["encrypted"])
                 employee = self._employee(conn, record["username"])
                 if employee and employee["enabled"]:
-                    return record
+                    if employee.get("auth_method") == "platform":
+                        connection = next((item for item in employee["connections"] if item["connection_id"] == record["connection_id"]), None)
+                        if (record.get("auth_method") != "platform" or connection is None
+                                or record.get("connection_hash") != connection["token_hash"]
+                                or not PlatformRegistry.external_current(conn, self.vault, employee, connection,
+                                                                         generation=record.get("platform_generation"))):
+                            raise ConnectorError("employee_login_required", "平台授权已更新或撤销，请从原平台重新进入。")
+                    return {"auth_method": "password", "auth_mode": "password", "display_name": employee["username"], **record}
         raise ConnectorError("employee_login_required", "员工登录已失效，请重新登录。")
 
     def logout(self, token):
@@ -228,6 +254,7 @@ class EmployeeStore:
 def create_remote_app(service: ConnectorService, origin: str, *, employees=None, dispatcher=None):
     origin = public_origin(origin)
     employees = employees or EmployeeStore(service.root, service.vault)
+    platforms = PlatformRegistry(service.root, service.vault, employees=employees)
     authority = urlsplit(origin).netloc
 
     @asynccontextmanager
@@ -254,6 +281,8 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
         if request.headers.get("host", "").lower() != authority:
             return JSONResponse({"ok": False, "error": {"code": "invalid_host", "message": "远程服务域名不匹配。"}}, status_code=403)
         supplied = request.headers.get("origin")
+        if request.url.path == "/integration/platform" and supplied is not None:
+            return JSONResponse({"ok": False, "error": {"code": "platform_backend_required", "message": "平台签名入口仅供可信后端调用。"}}, status_code=403)
         if ((supplied is not None and supplied != origin)
                 or (request.method not in {"GET", "HEAD"} and request.url.path.startswith("/portal/") and supplied != origin)):
             return JSONResponse({"ok": False, "error": {"code": "invalid_origin", "message": "拒绝来自其他网站的授权请求。"}}, status_code=403)
@@ -297,6 +326,13 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
             raise ConnectorError("csrf_invalid", "页面授权校验失败，请刷新后重试。")
         return session
 
+    def session_payload(session):
+        return {"ok": True, "username": session["username"], "client": session["client"], "csrf": session["csrf"],
+                "connection_id": session["connection_id"], "default_area": service.platform,
+                "areas": ["erp", "drp"] if service.platform == "erp" else ["drp"],
+                "auth_method": session.get("auth_method", "password"), "auth_mode": session.get("auth_mode", "password"),
+                "display_name": session.get("display_name", session["username"])}
+
     @app.get("/health")
     async def health():
         return {"ok": True, "version": __version__, "mode": "remote", "platform": service.platform}
@@ -304,6 +340,51 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
     @app.get("/login", response_class=HTMLResponse)
     async def login_page():
         return Path(__file__).with_name("remote_login.html").read_text(encoding="utf-8")
+
+    @app.post("/integration/platform")
+    async def platform_integration(request: Request):
+        return await asyncio.to_thread(platforms.integration, await body_json(request), origin)
+
+    @app.get("/portal/auth-options")
+    async def platform_options(request: Request):
+        if set(request.query_params) - {"connection"} or len(request.query_params.getlist("connection")) > 1:
+            raise ConnectorError("platform_connection_invalid", "连接入口无效，请返回原平台重新打开。")
+        return platforms.auth_options(request.query_params.get("connection"))
+
+    @app.post("/portal/platform-start")
+    async def platform_start(request: Request):
+        body = await body_json(request)
+        if set(body) - {"connection_id", "next", "area"} or (service.platform == "drp" and body.get("area") not in (None, "drp")):
+            raise ConnectorError("invalid_request", "平台授权入口参数无效。")
+        peer = request.client.host if request.client else "unknown"
+        payload, browser_cookie = await asyncio.to_thread(
+            platforms.start, body.get("connection_id"), origin, peer=peer, next_path=body.get("next"),
+            area=body.get("area"), old_cookie=request.cookies.get(CHALLENGE_COOKIE))
+        response = JSONResponse(payload)
+        response.set_cookie(CHALLENGE_COOKIE, browser_cookie, max_age=FLOW_TTL, secure=True, httponly=True, samesite="lax", path="/")
+        return response
+
+    @app.post("/portal/platform-login")
+    async def platform_login(request: Request):
+        # A failed callback must not resurrect an unrelated prior browser identity.
+        old_cookie = request.cookies.get(COOKIE)
+        if old_cookie:
+            employees.logout(old_cookie)
+        try:
+            body = await body_json(request)
+            if set(body) != {"code"}:
+                raise ConnectorError("invalid_request", "平台回调只接受一次性授权码。")
+            token, session, metadata = await asyncio.to_thread(platforms.login, body["code"], request.cookies.get(CHALLENGE_COOKIE), origin)
+            response = JSONResponse({**session_payload(session), **metadata})
+            response.set_cookie(COOKIE, token, max_age=SESSION_TTL, secure=True, httponly=True, samesite="strict", path="/")
+        except ConnectorError as error:
+            response = JSONResponse(error.as_dict(), status_code=401)
+            response.delete_cookie(COOKIE, secure=True, httponly=True, samesite="strict", path="/")
+        except Exception:  # noqa: BLE001 -- 所有回调失败均须清除旧身份Cookie，底层错误不返回浏览器。
+            response = JSONResponse({"ok": False, "error": {"code": "platform_code_invalid", "message": "平台回调未完成，请返回原平台重新打开。"}}, status_code=500)
+            response.delete_cookie(COOKIE, secure=True, httponly=True, samesite="strict", path="/")
+        response.delete_cookie(CHALLENGE_COOKIE, secure=True, httponly=True, samesite="lax", path="/")
+        return response
 
     @app.post("/portal/login")
     async def login(request: Request):
@@ -314,18 +395,14 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
         # Replace any prior browser authorization rather than leaving an unnoticed account active.
         if request.cookies.get(COOKIE):
             employees.logout(request.cookies[COOKIE])
-        response = JSONResponse({"ok": True, "username": session["username"], "client": session["client"],
-                                 "connection_id": session["connection_id"], "csrf": session["csrf"],
-                                 "default_area": service.platform, "areas": ["erp", "drp"] if service.platform == "erp" else ["drp"]})
+        response = JSONResponse(session_payload(session))
         response.set_cookie(COOKIE, token, max_age=SESSION_TTL, secure=True, httponly=True, samesite="strict", path="/")
         return response
 
     @app.get("/portal/session")
     async def session_status(request: Request):
         session = employee_session(request)
-        return {"ok": True, "username": session["username"], "client": session["client"], "csrf": session["csrf"],
-                "connection_id": session["connection_id"], "default_area": service.platform,
-                "areas": ["erp", "drp"] if service.platform == "erp" else ["drp"]}
+        return session_payload(session)
 
     @app.post("/portal/logout")
     async def employee_logout(request: Request):
@@ -399,7 +476,7 @@ def create_remote_app(service: ConnectorService, origin: str, *, employees=None,
             url = origin + "/login?connection=" + quote(identity["connection_id"], safe="")
             if target.platform == "drp":
                 url += "&area=drp"
-            return {"ok": True, "url": url, "message": "请在自己的浏览器打开此网址，登录本人员工账号后连接聚水潭。完成后可关闭。"}
+            return {"ok": True, "url": url, "message": "请在自己的浏览器打开此网址，完成本人身份授权后连接聚水潭。完成后可关闭。"}
         if action == "open-confirmation":
             record = target.ledger.get_preview(profile, body.get("preview_id", ""))
             if record["status"] != "ready" or record["digest"] != body.get("digest"):

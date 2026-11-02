@@ -1,6 +1,6 @@
 # AI 接入说明
 
-本仓库是公开接入入口。0.5.0 对外只有一个聚水潭连接器，默认 ERP、分销按需兼容；使用同一套 MCP 工具、一个服务地址和当前员工的一份调用授权。提供本机和多员工 HTTPS 服务两种运行方式；不要把仓库 URL 或员工 HTTPS 服务地址当作远程 MCP 协议地址。
+本仓库是公开接入入口。0.6.0 对外只有一个聚水潭连接器，默认 ERP、分销按需兼容；使用同一套 MCP 工具、一个服务地址和当前员工的一份调用授权。远程模式新增可信平台身份接入，承接平台已核验的钉钉等登录，无须员工另设连接器密码；独立部署保留原密码方式。不要把仓库 URL 或员工 HTTPS 服务地址当作远程 MCP 协议地址。
 
 稳定入口：[仓库说明](https://github.com/ditingchenming-sys/jst-personal-connector)、[最新发布](https://github.com/ditingchenming-sys/jst-personal-connector/releases/latest)。接入时读取 `main` 上的当前说明，再选择已发布版本。
 
@@ -9,8 +9,14 @@
 1. 读取本文件和 [INSTALL.md](INSTALL.md)，确认 Windows 或 Linux、Python 3.11+、当前 AI 的 MCP stdio 支持与配置位置。
 2. 优先使用正式 Release 中的完整 bundle；校验发布方提供的 SHA256 后解压，运行对应安装脚本。若尚无 Release，可从源码构建 wheel 再安装。安装脚本需要 wheel，不能把只有 wheel 的分发目录当作源码执行 `pip install .`。
 3. 每个 AI 使用独立 `--client`，例如 `codex`、`workbuddy`。用本机安装环境的 `jst-connector config` 生成配置，再合并到该 AI 的实际 MCP 配置；保留其他 MCP 设置，不复制维护者电脑的绝对路径。
-4. 配置命令不登录账号、不修改 AI 全局配置。启动 MCP 后先列出工具，应有 18 个；调用 `connector_status`，已有有效会话先恢复，只有需要登录时调用 `open_connection_manager`。远程部署使用管理员分配给本人本调用端的凭证，由 `JST_CONNECTOR_ACCESS_TOKEN` 注入，配置增加 `--remote-url https://实际域名`。远程返回的普通登录链接可交本人打开。
+4. 配置命令不登录账号、不修改 AI 全局配置。启动 MCP 后先列出工具，应有 18 个；调用 `connector_status`，已有有效会话先恢复，只有需要登录时调用 `open_connection_manager`。远程部署使用可信平台后端按已验证员工身份分配的独立调用凭证，或独立部署时管理员分配的凭证，由 `JST_CONNECTOR_ACCESS_TOKEN` 注入，配置增加 `--remote-url https://实际域名`。远程返回的普通登录链接可交本人打开。
 5. 本人在连接器页面填写账号、密码、协议同意及必要验证码。不要索取、复制或输出密码、Cookie、验证码、主密钥或带授权的管理页地址。登录完成后关闭该页，继续在 AI 对话中使用。
+
+## 平台身份接入
+
+平台已通过钉钉或其他登录方式验证员工时，按[安装说明的平台接入协议](INSTALL.md#平台已登录的身份接入)配置可信平台。平台后端从自己的已验证会话派生企业、用户和调用端，签发短期一次性授权；连接器核验后创建本人浏览器授权，直接进入聚水潭连接页。员工无需再输入另一套员工账号密码。
+
+签名密钥、签名证明、浏览器一次性code和员工API令牌均不进入AI工具或对话。MCP不新增平台签名/换票/自动批准工具。模型不能传`employee_id`、`profile`或`confirmed`替代身份及真实操作确认。工作台端仍须实现通用协议；发布连接器不代表任意工作台已自动接通。
 
 ## 分销板块接入
 

@@ -1,6 +1,6 @@
 # 安装与更新
 
-需要 Python 3.11+、网络访问和支持 MCP stdio 的 AI 客户端。当前版本 0.5.0，对外只有一个聚水潭连接器，默认ERP、分销按需兼容；可选本机组件或自己部署的Linux多员工HTTPS服务。GitHub只分发安装包，不代管账号或业务服务。
+需要 Python 3.11+、网络访问和支持 MCP stdio 的 AI 客户端。当前版本 0.6.0，对外只有一个聚水潭连接器，默认ERP、分销按需兼容；可选本机组件或自己部署的Linux多员工HTTPS服务。GitHub只分发安装包，不代管账号或业务服务。
 
 ## 完整分发包
 
@@ -102,7 +102,62 @@ server {
 
 `Host` 须匹配 `--public-url`，员工浏览器使用此 HTTPS 域名。应用检查固定域名和同源请求；浏览器凭证使用 Secure、HttpOnly、SameSite cookie。反向代理不要记录 Authorization、Cookie、请求体或登录参数。运行目录由部署账号独占读写。
 
-管理员在服务器本机创建员工账号，命令隐藏输入员工密码，调用凭证只写指定私有文件，不输出终端：
+### 平台已登录的身份接入
+
+工作台通常已通过钉钉等方式登录员工。0.6.0支持直接承接平台可信后端核验的身份，不要求员工另建或再次登录连接器密码账号。平台身份用于确定操作人，本人聚水潭登录用于取得业务权限，两者仍分别验证；连接器不直接读取钉钉Cookie。
+
+在连接器服务器本机登记可信平台的固定标识、授权入口和允许的企业。共享密钥使用独立的至少32字节原始随机文件，只保存在可信平台后端与连接器加密运行资料中；Linux权限须为600，不交给员工前端或MCP：
+
+```sh
+.venv/bin/python -m jst_connector platform-register --data-dir /var/lib/jst-connector \
+  --issuer business-platform --tenant actual-corp-id \
+  --login-url https://workbench.example.com/jst/authorize \
+  --secret-file /run/secrets/jst-platform-key
+```
+
+`--tenant`可重复指定，只允许这些企业。登记不是钉钉应用开通；平台须已完成自己的钉钉/其他身份核验，再实现下列通用后端接入。连接器不绑定某个工作台仓库。
+
+1. 平台后端从已验证的员工会话取得企业和用户的稳定ID，以固定调用端签名`provision`，POST到连接器的`/integration/platform`。连接器从`(issuer, tenant, subject)`隔离映射无密码内部员工，为该调用端分配连接及API令牌；后端私有保存返回的`access_token`和`connection_id`，按员工使用。重复`provision`表示显式轮换该调用端令牌，保留原profile及聚水潭资料，撤销既有页面授权；不要每次登录都重新provision。
+2. 员工打开正常`/login?connection=...`。平台身份模式页面只显示继续平台授权，不显示员工账号密码框；浏览器同源POST `/portal/platform-start`，只提交连接编号和可选板块/业务确认返回路径。连接器设置浏览器绑定cookie，生成120秒内有效的challenge，返回登记的HTTPS平台授权入口，附`challenge`和`audience`查询参数。
+3. 平台授权入口复用本人的钉钉/平台登录会话；无有效会话才按平台自己的流程登录。后端从该会话重新取企业、用户及固定调用端，签名`authorize`并携带challenge，通过后端POST `/integration/platform`。不要根据前端传入的企业/用户字段签名；`audience`始终使用部署配置中的连接器origin，不直接信任URL查询。
+4. 连接器核对challenge对应的企业、用户、调用端、连接和当前授权版本，返回固定本站`redirect_url`。平台将本人浏览器重定向到此地址；短期一次性code在URL片段中，连接器页面立即清除片段，再同源POST `/portal/platform-login`。兑换还须原浏览器HttpOnly挑战cookie，code/challenge只能消费一次；成功后进入聚水潭登录/已连接状态。
+5. 写入确认继续使用本人浏览器授权及CSRF，单点登录不会批准业务预览。确认页恢复授权只返回原有连接、板块和操作；不能用API调用令牌或平台登录证明代替本人点击确认。
+
+后端请求使用精确的JSON包裹结构：
+
+```python
+import hashlib, hmac, json, secrets, time
+
+def envelope(secret, *, action, tenant, subject, challenge=None):
+    # tenant/subject只能来自平台后端已经验证的当前员工会话。
+    now = int(time.time())
+    claims = {
+        "version": 1, "issuer": "business-platform",
+        "audience": "https://jst.example.com", "action": action,
+        "tenant": tenant, "subject": subject, "client": "workbench",
+        "request_id": secrets.token_urlsafe(24), "issued_at": now, "expires_at": now + 60,
+    }
+    if action == "authorize":
+        claims["challenge"] = challenge
+    raw = json.dumps(claims, ensure_ascii=False, sort_keys=True,
+                     separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return {"claims": claims, "signature": hmac.new(secret, raw, hashlib.sha256).hexdigest()}
+```
+
+只支持`provision`、`authorize`、`disable`三个动作。签名证明有效期不超过120秒，未来签发容忍10秒，`request_id`原子防重放；后端请求不携带浏览器`Origin`。`disable`禁用该外部身份及其调用/页面授权，管理员禁用的身份不能靠provision复活。仅支持预先登记的平台，不接受客户端自行指定验签地址、员工profile或任意回调URL。
+
+平台密钥轮换需使用从未登记过的新密钥重新执行`platform-register`；旧代证明、挑战、code、调用令牌和页面会话失效，后端须为仍启用的员工重新provision，原聚水潭资料仍保留。整体禁用平台：
+
+```sh
+.venv/bin/python -m jst_connector platform-disable --data-dir /var/lib/jst-connector \
+  --issuer business-platform
+```
+
+旧密码员工与新平台身份不按姓名、手机号或字符串ID自动合并。旧绑定保留；迁移需由对接方核对真实员工关系并切换到新平台连接，不借用旧默认账号。升级本包不会自动接通工作台的钉钉后端，需部署方完成上述受信登记和接口联调。安全设计参考[OAuth安全最佳实践关于CSRF与浏览器状态绑定](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.7)；本协议是项目自有可信平台接续协议，不宣称完整实现OAuth/OIDC授权服务器。
+
+### 独立部署的员工密码模式
+
+没有平台登录后端的独立部署可继续使用原方式。管理员在服务器本机创建员工账号，命令隐藏输入员工密码，调用凭证只写指定私有文件，不输出终端：
 
 ```sh
 umask 077
@@ -130,11 +185,11 @@ python -m jst_connector config --client workbuddy --format workbuddy \
 
 此配置运行 `mcp --remote-url` 的 stdio 适配器，继承员工自己的 `JST_CONNECTOR_ACCESS_TOKEN` 环境变量。配置中不包含令牌，AI客户端启动时须确实继承该秘密环境；不同员工或AI勿共用同一环境凭证。
 
-首次 `open_connection_manager` 返回普通远程登录网址。员工用自己电脑浏览器打开，登录管理员创建的员工账号，再连接本人聚水潭账号并按需完成短信；连接完成可关页。有效登录态加密保存在服务器，按员工和调用端隔离，已有本机模式不会改为共享会话。
+首次 `open_connection_manager` 返回普通远程登录网址。平台身份接入时继续平台授权后直接连接本人聚水潭；独立密码模式才登录管理员创建的员工账号。聚水潭按需完成本人短信，连接完成可关页。有效登录态加密保存在服务器，按员工和调用端隔离，已有本机模式不会改为共享会话。
 
 写入使用通用契约和真实预览。`request_operation_confirmation` 返回独立业务确认网址，需要本人员工浏览器会话；登录页不显示业务预览。确认后由 AI 或可信系统执行同一预览，执行结果回查并记录。只有MCP调用令牌不能自行批准。
 
-工作台可通过每员工各自令牌调用同一 `/api/{action}`；不能用共享令牌加请求参数 `profile/employee_id` 代替身份映射。具体工作台还须接好账号分配、秘密保存和可信确认；本仓库发布不等于已改动某个外部工作台。
+工作台可通过每员工各自令牌调用同一 `/api/{action}`；不能用共享令牌加请求参数 `profile/employee_id` 代替身份映射。平台身份方式由可信后端核验后分配令牌，无须另设员工密码。工作台仍须接好秘密保存和可信确认；本仓库发布不等于已改动某个外部工作台。
 
 后端参考：[FastAPI 身份认证](https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/)、[Playwright 请求观察](https://playwright.dev/python/docs/network)。本实现使用服务端存储的随机会话及盐化密码摘要，接口调用与浏览器确认的权限分别校验。
 

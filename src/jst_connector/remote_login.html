@@ -4,7 +4,8 @@
 :root{font-family:"Microsoft YaHei",system-ui,sans-serif;color:#18314c;background:#edf4fc}*{box-sizing:border-box}body{margin:0;padding:40px 20px}main{max-width:500px;margin:0 auto}h1{font-size:25px;margin:0 0 12px}h2{font-size:19px;margin:0 0 16px}.card{background:#fff;border:1px solid #dce5f0;border-radius:12px;padding:28px;margin:20px 0}p{line-height:1.8;color:#64768c;font-size:14px}label{display:block;font-size:14px;margin:16px 0 8px}input:not([type=checkbox]){width:100%;padding:12px;border:1px solid #c7d4e4;border-radius:5px;font:inherit}button{font:inherit;cursor:pointer;border:1px solid #087fff;border-radius:5px;padding:11px 14px;background:#087fff;color:white;margin-top:16px}button.secondary{background:#fff;color:#286cb5;border-color:#c9d6e5}button:disabled{opacity:.5;cursor:default}.check{display:flex;gap:8px;align-items:flex-start;font-size:12px;line-height:1.7}.check input{margin-top:4px}a{color:#0871da}#message{white-space:pre-wrap;overflow-wrap:anywhere;color:#254e77;background:#e5f0ff;border-radius:5px;padding:14px}input:focus,button:focus-visible{outline:2px solid #55a3ff;outline-offset:2px}[hidden]{display:none!important}#code{max-width:200px}.row{display:flex;gap:8px;flex-wrap:wrap}.row button{font-size:13px}.caption{font-size:12px}.full{width:100%}
 </style></head><body><main>
 <h1>聚水潭连接授权</h1><p>使用本人账号独立连接。完成授权即可关闭本页，回到 AI 或业务系统继续操作。</p>
-<section class="card" id="employee-card"><h2>登录员工账号</h2><p class="caption">请使用管理员为本人创建的连接器员工账号。此账号与聚水潭账号分别验证。</p>
+<section class="card" id="platform-card" hidden><h2>继续平台授权</h2><p id="platform-description">使用当前工作台已登录的本人身份继续，无需另建或登录连接器员工账号。</p><button id="platform-continue" class="full" type="button">返回平台继续授权</button></section>
+<section class="card" id="employee-card" hidden><h2>登录员工账号</h2><p class="caption">请使用管理员为本人创建的连接器员工账号。此账号与聚水潭账号分别验证。</p>
 <form id="employee-form"><label for="employee">员工账号</label><input id="employee" autocomplete="username" maxlength="128" required><label for="employee-password">员工密码</label><input id="employee-password" type="password" autocomplete="current-password" maxlength="1024" required><button type="submit" class="full">登录员工账号</button></form></section>
 <section class="card" id="jst-card" hidden><h2 id="connection-title">连接本人的聚水潭</h2><p id="employee-display" class="caption"></p>
 <label for="business-area">业务板块</label><select id="business-area" aria-label="业务板块" disabled style="width:100%;padding:10px;border:1px solid #c7d4e4;border-radius:5px"><option value="erp">ERP（常用）</option><option value="drp">分销（按需）</option></select>
@@ -15,15 +16,19 @@
 <p id="progress" role="status"></p><button id="cancel" type="button" class="secondary" hidden>取消本次登录</button>
 <div id="complete" hidden><h2>连接授权完成</h2><p>可以关闭本页，回到 AI 或业务系统继续使用。关闭页面不会退出聚水潭账号。</p></div>
 <div class="row"><button id="refresh" class="secondary">检查连接</button><button id="jst-logout" class="secondary">退出聚水潭账号</button><button id="employee-logout" class="secondary">退出此页面</button></div></section>
-<p id="message" role="status">正在检查员工登录……</p><p class="caption">聚水潭的扫码、短信及其他本人验证要求以原系统为准。请勿在 AI 对话中提供密码或 Cookie。</p>
+<p id="message" role="status">正在检查连接授权……</p><p class="caption">平台身份授权与聚水潭登录分别核验。聚水潭的扫码、短信及其他本人验证要求以原系统为准。请勿在 AI 对话中提供密码或 Cookie。</p>
 </main><script>
 'use strict';
 const $=id=>document.getElementById(id),params=new URLSearchParams(location.search);
+const callback=new URLSearchParams(location.hash.slice(1)),hasPlatformCode=callback.has('platform_code');
+let platformCode=hasPlatformCode?callback.get('platform_code'):null;
+if(hasPlatformCode)history.replaceState(null,'',location.pathname+location.search);
 let csrf='',session=null,timer=null,pollBusy=null,epoch=0,termsReady=false,area=params.get('area')||null;
 const requestedConnection=params.get('connection');
+let activeConnection=requestedConnection,authMode=hasPlatformCode?'platform':null;
 function message(value){$('message').textContent=value;}
 function stop(){if(timer)clearInterval(timer);timer=null;}
-function signedOut(){epoch++;stop();csrf='';session=null;$('employee-card').hidden=false;$('jst-card').hidden=true;$('password').value='';$('code').value='';message('员工登录已失效，请重新登录本人员工账号。');}
+function signedOut(){epoch++;stop();csrf='';session=null;$('employee-card').hidden=authMode!=='password';$('platform-card').hidden=authMode!=='platform';$('jst-card').hidden=true;$('password').value='';$('code').value='';$('employee-password').value='';if(authMode==='platform')$('platform-continue').textContent='返回平台重新授权';message(authMode==='password'?'员工登录已失效，请重新登录本人员工账号。':'当前平台授权已失效，请返回平台重新授权。');}
 async function request(path,body,method='POST'){
  const response=await fetch(path,{method,credentials:'same-origin',redirect:'error',headers:{'Content-Type':'application/json',...(csrf?{'X-CSRF-Token':csrf}:{})},...(method==='GET'?{}:{body:JSON.stringify(body||{})})});
  const result=await response.json();if(response.status===401){signedOut();}
@@ -31,7 +36,21 @@ async function request(path,body,method='POST'){
 }
 const api=(action,body={})=>request('/portal/connection/'+action,{...body,...(area?{area}:{})});
 async function run(action){try{await action();}catch(error){message(error.message);}}
-function nextPath(){const value=params.get('next');if(!value||!value.startsWith('/operations/'))return null;try{const target=new URL(value,location.origin);if(target.origin!==location.origin||!/^\/operations\/[A-Za-z0-9_-]{16,80}$/.test(target.pathname)||target.hash)return null;for(const[key,part]of target.searchParams){if(key==='connection'&&/^[A-Za-z0-9_-]+$/.test(part))continue;if(key==='area'&&['erp','drp'].includes(part))continue;return null;}return target.pathname+target.search;}catch{return null;}}
+function safeNext(value){if(!value||!value.startsWith('/operations/'))return null;try{const target=new URL(value,location.origin);if(target.origin!==location.origin||!/^\/operations\/[A-Za-z0-9_-]{16,80}$/.test(target.pathname)||target.hash)return null;for(const[key,part]of target.searchParams){if(target.searchParams.getAll(key).length!==1)return null;if(key==='connection'&&/^[A-Za-z0-9_-]+$/.test(part)&&(!activeConnection||part===activeConnection))continue;if(key==='area'&&['erp','drp'].includes(part))continue;return null;}return target.pathname+target.search;}catch{return null;}}
+function nextPath(){return safeNext(params.get('next'));}
+async function authOptions(){
+ const query=activeConnection?'?'+new URLSearchParams({connection:activeConnection}).toString():'';
+ const options=await request('/portal/auth-options'+query,null,'GET');
+ if(options.mode==='platform'){authMode='platform';$('employee-card').hidden=true;$('platform-card').hidden=false;$('platform-continue').textContent=options.login_label||'返回平台继续授权';message('请使用当前平台已登录的本人身份继续授权。');}
+ else if(options.mode==='password'){authMode='password';$('platform-card').hidden=true;$('employee-card').hidden=false;message('请登录本人的员工账号后连接聚水潭。');}
+ else throw Error('当前授权入口尚未就绪，请返回平台重新打开连接。');
+}
+$('platform-continue').onclick=()=>run(async()=>{
+ if(!activeConnection){message('请返回原平台，重新打开聚水潭连接授权。');return;}
+ const current=epoch;$('platform-continue').disabled=true;
+ try{const next=nextPath(),result=await request('/portal/platform-start',{connection_id:activeConnection,...(next?{next}:{}),...(area?{area}:{})});if(current!==epoch)return;const target=new URL(result.login_url);if(target.protocol!=='https:'||target.username||target.password)throw Error('平台授权入口无效，请返回平台重新打开。');location.assign(target.href);}
+ catch(error){if(current===epoch)throw error;}finally{if(current===epoch)$('platform-continue').disabled=false;}
+});
 function showLogin(state){
  const active=['starting','logging_in','need_code','verifying','identity_pending','notice_pending'].includes(state.status),connected=state.status==='connected';
  $('jst-form').hidden=active||connected;$('code-form').hidden=state.status!=='need_code';$('complete').hidden=!connected;$('cancel').hidden=!active;
@@ -43,10 +62,12 @@ function showLogin(state){
 async function poll(){const current=epoch;if(pollBusy===current)return;pollBusy=current;try{const result=await api('login-status');if(current===epoch)showLogin(result.login);}catch(error){if(current===epoch)throw error;}finally{if(pollBusy===current)pollBusy=null;}}
 async function status(){const current=epoch;try{const result=await api('status');if(current!==epoch)return;const value=result.connection,identity=value.identity_display;message((value.message||'')+'\n连接状态：'+(value.status==='connected'?'已连接':value.status==='disconnected'?'未连接':'待核验')+(identity?.company_name?'\n公司：'+identity.company_name+'；员工：'+identity.user_name:''));}catch(error){if(current===epoch)throw error;}}
 async function ready(value){
- if(requestedConnection&&value.connection_id&&requestedConnection!==value.connection_id){signedOut();message('此页面对应另一个调用端，请重新登录本人的员工账号。');return;}
- session=value;csrf=value.csrf;$('employee-card').hidden=true;$('jst-card').hidden=false;$('employee-display').textContent='员工：'+value.username+'；调用端：'+value.client;
- area=area||value.default_area||'erp';if(!['erp','drp'].includes(area))throw Error('业务板块无效，请重新打开连接授权页。');
- const target=nextPath();if(target){location.replace(target);return;}
+ if(requestedConnection&&value.connection_id&&requestedConnection!==value.connection_id){signedOut();message('此页面对应另一个连接，请返回对应平台重新打开授权入口。');return;}
+ if(value.auth_method==='platform'||value.auth_mode==='platform'||value.mode==='platform')authMode='platform';else if(value.auth_method==='password'||value.auth_mode==='password'||value.mode==='password')authMode='password';
+ activeConnection=value.connection_id||activeConnection;session=value;csrf=value.csrf;$('employee-card').hidden=true;$('platform-card').hidden=true;$('jst-card').hidden=false;$('employee-display').textContent=authMode==='platform'?'已通过当前平台完成本人身份授权。':'员工：'+value.username+'；调用端：'+value.client;
+ area=area||value.area||value.default_area||'erp';if(!['erp','drp'].includes(area))throw Error('业务板块无效，请重新打开连接授权页。');
+ const target=safeNext(value.next)||nextPath();if(target){location.replace(target);return;}
+ if(hasPlatformCode&&activeConnection){const context=new URLSearchParams({connection:activeConnection,area});history.replaceState(null,'',location.pathname+'?'+context.toString());params.set('connection',activeConnection);params.set('area',area);}
  await loadArea();
 }
 async function loadArea(){const current=epoch;let terms;try{terms=await api('login-options');}catch(error){if(current===epoch)throw error;return;}if(current!==epoch||!session)return;area=terms.area||terms.platform||area||'erp';const available=terms.areas||session.areas||[area];for(const option of $('business-area').options)option.disabled=!available.includes(option.value);$('business-area').value=area;$('business-area').disabled=available.length<2;if(terms.platform_name)$('connection-title').textContent='连接本人的'+terms.platform_name;$('erp-connect').hidden=!terms.erp_sso_available;for(const[id,key]of[['agreement','agreement_url'],['privacy','privacy_url']]){const url=new URL(terms.terms[key]);if(url.protocol!=='https:')throw Error('协议地址无效，请更新连接器。');$(id).href=url.href;}termsReady=true;await status();if(current===epoch)await poll();}
@@ -60,6 +81,15 @@ $('refresh').onclick=()=>run(async()=>{await status();await poll();});
 $('erp-connect').onclick=()=>run(async()=>{const current=++epoch;$('erp-connect').disabled=true;message('正在核验本人的ERP并接续分销…');try{const result=await api('login-from-erp');if(current===epoch)showLogin(result.login);}catch(error){if(current===epoch)throw error;}finally{if(current===epoch)$('erp-connect').disabled=false;}});
 $('jst-logout').onclick=()=>run(async()=>{if(!confirm('退出本员工当前板块的聚水潭账号并清除其登录资料？'))return;const current=++epoch;stop();try{await api('logout');if(current!==epoch)return;$('username').value='';$('remember').checked=false;await status();if(current===epoch)await poll();}catch(error){if(current===epoch)throw error;}});
 $('employee-logout').onclick=()=>run(async()=>{await request('/portal/logout');signedOut();message('已退出此页面；聚水潭连接仍保留。');});
-run(async()=>{try{await ready(await request('/portal/session',null,'GET'));}catch(error){signedOut();message(error.message);}});
+run(async()=>{
+ if(hasPlatformCode){
+  authMode='platform';signedOut();message('正在完成平台本人身份授权…');
+  try{if(!platformCode)throw Error('invalid callback');const code=platformCode;platformCode=null;await ready(await request('/portal/platform-login',{code}));}
+  catch{platformCode=null;signedOut();$('platform-card').hidden=false;$('employee-card').hidden=true;$('platform-continue').textContent='返回平台重新授权';message('平台授权未完成或已失效，请返回原平台重新打开此连接。');}
+  return;
+ }
+ try{await ready(await request('/portal/session',null,'GET'));}
+ catch{signedOut();try{await authOptions();}catch{message('连接授权入口尚未就绪，请返回平台重新打开连接。');}}
+});
 window.addEventListener('pagehide',stop);
 </script></body></html>

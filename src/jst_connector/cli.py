@@ -61,7 +61,8 @@ def main(argv=None):
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("init", "serve", "mcp", "open", "status", "catalog", "config", "doctor",
-                    "serve-remote", "employee-add", "employee-token", "employee-disable", "link-erp"):
+                    "serve-remote", "employee-add", "employee-token", "employee-disable", "link-erp",
+                    "platform-register", "platform-disable"):
         part = sub.add_parser(command)
         part.add_argument("--data-dir", type=Path)
         part.add_argument("--platform", choices=("erp", "drp"), default="erp",
@@ -80,6 +81,12 @@ def main(argv=None):
             part.add_argument("--token-output", required=True, type=Path, help="员工调用凭证文件；须安全保管，不放入源码或安装包")
         if command == "employee-add":
             part.add_argument("--password-file", type=Path, help="可选：仅当前用户可读的员工密码文件；省略时隐藏输入")
+        if command in ("platform-register", "platform-disable"):
+            part.add_argument("--issuer", required=True, help="可信平台的固定标识，与其后端签名一致")
+        if command == "platform-register":
+            part.add_argument("--login-url", required=True, help="平台处理本人登录授权的固定HTTPS入口")
+            part.add_argument("--tenant", required=True, action="append", help="允许的企业标识；多个企业重复指定")
+            part.add_argument("--secret-file", required=True, type=Path, help="至少32字节原始随机共享密钥文件；仅可信后端持有")
         if command == "link-erp":
             part.add_argument("--client", default="codex", type=_client_argument)
             part.add_argument("--erp-data-dir", required=True, type=Path)
@@ -94,6 +101,23 @@ def main(argv=None):
     args = parser.parse_args(argv)
     root = data_directory(args.data_dir, platform=args.platform)
     try:
+        if args.command in ("platform-register", "platform-disable"):
+            from .platform_auth import PlatformRegistry
+            from .platform_store import ensure_platform
+            from .vault import Vault
+            ensure_platform(root, args.platform)
+            registry = PlatformRegistry(root, Vault(root))
+            if args.command == "platform-register":
+                secret_path = args.secret_file.expanduser().resolve()
+                if os.name != "nt" and secret_path.stat().st_mode & 0o077:
+                    raise ConnectorError("unsafe_secret_file", "平台签名密钥文件须仅当前用户可读（chmod 600）。")
+                registry.register(args.issuer, args.login_url, secret_path.read_bytes(), args.tenant)
+                message = "可信平台已登记；平台后端核验员工身份后可接续授权，无须另设员工密码。"
+            else:
+                registry.disable(args.issuer)
+                message = "可信平台已禁用；该平台的调用与页面授权不可继续使用。"
+            print(json.dumps({"ok": True, "message": message}, ensure_ascii=False))
+            return
         if args.command == "link-erp":
             from .erp_sso import ErpLinks
             from .platform_store import ensure_platform
