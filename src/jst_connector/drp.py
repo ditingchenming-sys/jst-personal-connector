@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from playwright.async_api import Error as PlaywrightError
 
-from .browser import BrowserManager, safe_url
+from .browser import BrowserManager, redact, safe_url
 from .errors import ConnectorError
 from .identity import _display_name, _identity_id
 from .login_flow import PasswordLoginFlows
@@ -435,9 +435,12 @@ class DrpBrowserManager(BrowserManager):
                         session.auth_revision += 1
 
     async def request(self, profile, method, url, payload=None):
-        # Existing fixed ERP shortcuts must never run against this independent site.
-        if method != "GET" or payload is not None or not self.site_policy.page_url(url):
+        from .discovery_browser import _public_destination
+        from .drp_read_policy import approved_request, validate_response
+        page_read = method == "GET" and payload is None and self.site_policy.page_url(url)
+        if not page_read and not approved_request(method, url, payload):
             raise ConnectorError("CAPABILITY_UNADAPTED", "分销功能请通过通用页面探索与接口契约调用，不使用ERP专用接口。")
+        await _public_destination(url, policy=self.site_policy)
         async with self._lock(profile):
             session = await self._open(profile)
             if session.login:
@@ -446,7 +449,10 @@ class DrpBrowserManager(BrowserManager):
                 session.identity = dict(self.vault.load_session(profile)["identity"])
             identity = await self._verify(session)
             self._assert_scope(profile, session, identity)
-            response = await session.context.request.get(url, timeout=30000, max_redirects=0)
+            headers = {} if page_read else await self.business_headers(session, url)
+            self._assert_scope(profile, session, identity)
+            response = await session.context.request.fetch(url, method=method, data=payload,
+                                                           headers=headers, timeout=30000, max_redirects=0)
             try:
                 if response.url != url or response.status != 200:
                     raise ConnectorError("ERP_SESSION_REJECTED", "分销页面读取未成功，请核实本人连接。")
@@ -454,7 +460,11 @@ class DrpBrowserManager(BrowserManager):
                 if len(body) > 8_000_000:
                     raise ConnectorError("ERP_RESPONSE_TOO_LARGE", "页面结果过大，请使用通用探索分段读取。")
                 self._assert_scope(profile, session, await self._verify(session))
-                return {"status": 200, "text": body}
+                result = {"status": 200, "text": body, "content_type": response.headers.get("content-type", "")}
+                pagination = validate_response(method, url, payload, result)
+                if pagination is not None:
+                    result["pagination"] = pagination
+                return result
             finally:
                 try:
                     await response.dispose()
@@ -467,10 +477,48 @@ class DrpClient:
         self.browser = browser
 
     def catalog(self):
-        return []
+        return [{"id": "DRP_SUPPLIER_OPTIONS", "name": "分销已关联供应商选项", "kind": "query",
+                 "status": "adapted_pending_live_validation", "verification": "官方静态协议及隔离测试通过，待连接器真实账号验收",
+                 "adapted_scope": "读取当前账号有权选择的供应商；不是本公司商品管理列表", "parameters": {}},
+                {"id": "DRP_SUPPLIER_GOODS", "name": "分销供应商商品价格及库存", "kind": "query",
+                 "status": "adapted_pending_live_validation", "verification": "官方静态协议及隔离测试通过，待连接器真实账号验收",
+                 "adapted_scope": "按已选supplierCoId读取当前页SKU价格库存；大供应商异步链须另经通用探索核对",
+                 "parameters": {"supplierCoId": "从供应商选项中选择的supplierCoId业务编号，必填",
+                                "pageNum": "页码，默认1", "pageSize": "每页条数，默认20，最大500"}}]
 
     async def query(self, profile, capability_id, parameters):
-        raise ConnectorError("CAPABILITY_UNADAPTED", "分销功能不受固定清单限制，请先通过通用探索定位对应页面，保存并调用当前账号的查询契约。")
+        from .drp_read_policy import (
+            SUPPLIER_GOODS_PATH,
+            SUPPLIER_OPTIONS_PATH,
+            approved_request,
+            validate_response,
+        )
+        if capability_id not in {"DRP_SUPPLIER_OPTIONS", "DRP_SUPPLIER_GOODS"}:
+            raise ConnectorError("CAPABILITY_UNADAPTED", "分销功能不受固定清单限制，请先通过通用探索定位对应页面，保存并调用当前账号的查询契约。")
+        if not isinstance(parameters, dict):
+            raise ConnectorError("INVALID_PARAMETERS", "查询条件必须是对象。")
+        allowed = set() if capability_id == "DRP_SUPPLIER_OPTIONS" else {"supplierCoId", "pageNum", "pageSize"}
+        if set(parameters) - allowed:
+            raise ConnectorError("UNSUPPORTED_PARAMETERS", "存在尚未核实的查询条件，未执行查询；其它条件可通过通用接口契约复用。")
+        payload, method, path = None, "GET", SUPPLIER_OPTIONS_PATH
+        if capability_id == "DRP_SUPPLIER_GOODS":
+            supplier = parameters.get("supplierCoId")
+            if isinstance(supplier, bool) or not isinstance(supplier, (int, str)) or not re.fullmatch(r"[0-9]{1,24}", str(supplier)) or int(supplier) <= 0:
+                raise ConnectorError("INVALID_PARAMETERS", "请从供应商选项中选择有效的supplierCoId业务编号。")
+            payload = {"supplierCoId": supplier, "pageNum": parameters.get("pageNum", 1), "pageSize": parameters.get("pageSize", 20)}
+            method, path = "POST", SUPPLIER_GOODS_PATH
+        url = "https://gyl.scm121.com" + path
+        if not approved_request(method, url, payload):
+            raise ConnectorError("INVALID_PARAMETERS", "分页条件无效：页码须为正整数，每页条数须为1至500。")
+        async with self.browser.verified_scope(profile) as identity:
+            response = await self.browser.request(profile, method, url, payload)
+            pagination = validate_response(method, url, payload, response)
+            data = json.loads(response["text"])
+            return redact({"capability_id": capability_id, "identity": identity, "filters": dict(parameters),
+                           "data": data["data"], "total": pagination["total"], "pageNum": pagination["page"],
+                           "pageSize": pagination["page_size"], "has_more": pagination["has_more"], "complete": False,
+                           "scope": "supplier_options" if payload is None else "current_page",
+                           "verification": "本次返回已通过本人身份和业务成功信封核验；仅当前页或所返回选项，不代表全量。"})
 
     async def preview(self, profile, capability_id, parameters):
         raise ConnectorError("CAPABILITY_UNADAPTED", "分销写入请从实际请求形成通用写契约，再预览、本人确认、执行及回查。")

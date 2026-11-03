@@ -93,13 +93,15 @@ async def test_connection_grant_allows_strict_page_entry_without_extra_approval(
     entry = await registry.request_entry("codex", page, "查看商品筛选页面")
     assert entry["status"] == "connection_read_authorized" and entry["entry_id"] is None
     assert registry.entry_allowed("codex", page)
-    assert not registry.entry_allowed("codex", page+"?other=1")
+    assert registry.entry_allowed("codex", page+"?other=1")
+    assert not registry.entry_allowed("codex", page+"?__VIEWSTATE=hidden")
     vault.clear_session("codex")
     assert not registry.entry_allowed("codex", page)
     vault.save_session("codex", {"cookies": []}, IDENTITY)
     assert registry.entry_allowed("codex", page)
-    with pytest.raises(ConnectorError, match="不支持查询串"):
-        await registry.request_entry("codex", page+"?id=1", "查看页面")
+    assert (await registry.request_entry("codex", page+"?id=1", "查看页面"))["status"] == "connection_read_authorized"
+    with pytest.raises(ConnectorError, match="凭据或动作"):
+        await registry.request_entry("codex", page+"?__CALLBACKPARAM=save", "查看页面")
     assert registry.list("codex") == []
 
 

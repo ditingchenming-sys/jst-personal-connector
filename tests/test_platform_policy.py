@@ -115,6 +115,96 @@ def test_drp_ordinary_spa_paths_are_readable_pages(value):
     assert get_policy("drp").page_url(value)
 
 
+def test_goods_iframe_assets_and_passive_paging_query_are_supported():
+    policy = get_policy("drp")
+    assert policy.page_url("https://goods.scm121.com/manage/goods/goodsManage/index?appcode=main&__POWERED_BY_GYL_FRAME__=1&pageNum=1&pageSize=20")
+    assert policy.page_url("https://sc.scm121.com/manage/goods/goodsManage/index?sort=%7B%22code%22%3A%22created%22%7D&draftStatus=0")
+    assert policy.asset_url("https://assets.sursung.com/prod/goods/umi.5697886d.js")
+    assert policy.asset_url("https://assets.sursung.com/prod/warehouse/main.js")
+    for query in ("erpToken=private", "action=publish", "pageNum=1&pageNum=2"):
+        assert not policy.page_url("https://goods.scm121.com/manage/goods/goodsManage/index?" + query)
+    for host in ("goods.scm121.com", "sc.scm121.com"):
+        for path in ("/api", "/api/goods/customUnknown", "/api/company/deactivate", "/API/company/deactivate",
+                     "//api/company/deactivate", "/./api/company/deactivate", "/.//api/company/deactivate"):
+            assert not policy.page_url("https://" + host + path)
+
+
+def test_drp_webbox_verified_public_static_roots_are_asset_only():
+    policy = get_policy("drp")
+    for url in policy.asset_urls:
+        assert policy.asset_url(url)
+        assert not policy.business_url(url)
+        assert not policy.page_url(url)
+        assert not policy.asset_url(url + "?token=private")
+        assert not policy.asset_url(url.replace("https://", "https://user@"))
+    assert not policy.asset_url("https://files.erp321.com/cdn/webbox/unknown.js")
+    assert not policy.asset_url("https://cdn.erp321.cn/cdn/other.js")
+    assert policy.asset_url("https://cdn.erp321.cn/webbox/WebboxScmGoods/umi.9e7b6796.js")
+    assert policy.asset_url("https://cdn.erp321.cn/webbox/OtherApp/umi.9e7b6796.js")
+    assert not policy.business_url("https://cdn.erp321.cn/webbox/WebboxScmGoods/umi.9e7b6796.js")
+    assert policy.asset_url("https://files.erp321.com/cdn/webbox/load-config/warehouse/url.config.js")
+
+
+@pytest.mark.parametrize("suffix", ["?categoryPath=tops&brand=fixture&warehouseFilter=main",
+                                    '?sort=%7B%22code%22%3A%22created%22%2C%22order%22%3A%22desc%22%7D',
+                                    "#/stock?categoryPath=tops&warehouseFilter=main"])
+def test_drp_passive_filters_and_hash_routes_do_not_require_a_business_field_catalog(suffix):
+    policy = get_policy("drp")
+    assert policy.page_url("https://sc.scm121.com/" + suffix)
+    candidate = "https://warehouse.scm121.com/" + suffix
+    assert policy.candidate_page_url(candidate)
+    assert not policy.page_url(candidate)
+    assert not policy.business_url(candidate)
+
+
+@pytest.mark.parametrize("suffix", ["?code=auth-once", "?employee_id=other", "?source_identity=other", "?filter=%7B%22co_id%22%3A1%7D",
+                                    "?filter=%7B%22action_name%22%3A%22save%22%7D", "?brand=a&brand=b", "?filter=%7B%22a%22%3A1%2C%22a%22%3A2%7D",
+                                    "?filter=%7Bmalformed", "?redirect_url=https://evil.test", "?otp=123456", "?brand=%ZZ", "?brand=%00",
+                                    "#token=secret", "#/login", "#/api/company/deactivate", "#/stock?ticket=secret", "#/stock?method=save",
+                                    "#/stock?filter=%7B%22token%22%3A%22private%22%7D", "#//api/unknown", "#/stock?brand=" + "a" * 4097])
+def test_drp_page_candidates_reject_credential_dispatch_ambiguity_and_unbounded_filters(suffix):
+    policy = get_policy("drp")
+    assert not policy.page_url("https://sc.scm121.com/" + suffix)
+    assert not policy.candidate_page_url("https://warehouse.scm121.com/" + suffix)
+
+
+@pytest.mark.parametrize("url", ["https://account.scm121.com/", "https://auth.scm121.com/", "https://gyl.scm121.com/",
+                                 "https://innerapi.scm121.com/", "https://warehouse.scm121.com/api/unknown",
+                                 "https://warehouse.scm121.com/publish", "https://warehouse.scm121.com/add",
+                                 "https://warehouse.scm121.com.evil.test/", "https://user@warehouse.scm121.com/",
+                                 "https://warehouse.scm121.com:443/", "http://warehouse.scm121.com/"])
+def test_candidate_family_never_grants_auth_api_or_external_navigation(url):
+    assert not get_policy("drp").candidate_page_url(url)
+
+
+def test_erp_normal_page_filters_share_generic_passive_query_rules():
+    policy = get_policy("erp")
+    assert policy.page_url("https://www.erp321.com/app/stock/stock.aspx?warehouseFilter=main&categoryPath=tops")
+    assert policy.page_url(policy.entry_url + "?brand=fixture")
+    assert not policy.page_url("https://www.erp321.com/api/GetUnknown?brand=fixture")
+    assert not policy.page_url("https://api.erp321.com/app/stock/stock.aspx?brand=fixture")
+
+
+@pytest.mark.parametrize("key", ["am___", "__CALLBACKID", "__CALLBACKPARAM", "callcontrol", "__VIEWSTATE", "__VIEWSTATEGENERATOR",
+                                  "eventvalidation", "nonce", "captcha", "u_cid", "u_co_id", "owner_co_id", "authorize_co_id",
+                                  "filter[uid]", "filter.action_name", "filter[__proto__]"])
+def test_erp_hidden_identity_and_callback_query_fields_are_not_passive_filters(key):
+    from jst_connector.platform_policy import passive_page_query
+    assert not passive_page_query(key + "=fixture")
+    assert not get_policy("erp").page_url("https://www.erp321.com/app/stock/stock.aspx?" + key + "=fixture")
+
+
+def test_passive_query_nested_string_containers_and_limits_cannot_hide_controls():
+    from urllib.parse import urlencode
+
+    from jst_connector.platform_policy import passive_page_query
+    assert not passive_page_query(urlencode({"filter": '{"payload":"{\\"uid\\":1}"}'}))
+    assert not passive_page_query(urlencode({"filter": '{"auth":{"code":"ticket"}}'}))
+    assert not passive_page_query(urlencode({"filter": '[' * 1001 + '0' + ']' * 1001}))
+    assert not passive_page_query("brand=normal;action=delete")
+    assert passive_page_query("sort[code]=created&categoryPath[]=tops")
+
+
 @pytest.mark.parametrize("value", ["https://sc.scm121.com/user/login", "https://sc.scm121.com/orders/submit",
                                     "https://sc.scm121.com/order/GetAndSubmit", "https://sc.scm121.com/orders/list?action=Delete",
                                     "https://gyl.scm121.com/api/drp/GetData"])

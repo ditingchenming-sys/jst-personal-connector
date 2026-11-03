@@ -368,7 +368,8 @@ def test_expired_or_opaque_token_cannot_be_called_erp_to_drp_login():
 async def test_drp_does_not_offer_erp_fixed_capabilities(manager):
     browser, _contexts = manager
     erp = DrpClient(browser)
-    assert erp.catalog() == [] and browser.site_policy.platform == "drp"
+    assert {item["id"] for item in erp.catalog()} == {"DRP_SUPPLIER_OPTIONS", "DRP_SUPPLIER_GOODS"}
+    assert browser.site_policy.platform == "drp"
     with pytest.raises(ConnectorError, match="通用"):
         await erp.query("codex", "Q02", {})
     with pytest.raises(ConnectorError, match="通用"):

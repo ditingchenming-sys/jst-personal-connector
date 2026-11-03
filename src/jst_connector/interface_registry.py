@@ -12,12 +12,12 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urldefrag, urlencode, urlsplit
 
 from .adapters import ORDER_URL, PURCHASE_URL
 from .adapters.login import ENTRY_URL
 from .errors import ConnectorError
-from .platform_policy import get_policy
+from .platform_policy import get_policy, passive_page_query
 from .vault import _json
 
 _HOSTS = {"www.erp321.com", "src.erp321.com", "api.erp321.com", "apiweb.erp321.com"}
@@ -25,7 +25,7 @@ _BUILTINS = {ENTRY_URL, ORDER_URL, PURCHASE_URL}
 _SECRET = re.compile(r"pass|pwd|cookie|authorization|token|secret|credential|session|viewstate|eventvalidation|nonce|csrf|xsrf|captcha|ticket|signature|api.?key|u_cid", re.IGNORECASE)
 _IDENTITY = {"uid", "user_id", "userid", "coid", "co_id", "company_id", "companyid", "u_id", "u_co_id",
              "owner_co_id", "authorize_co_id", "ownercoid", "authorizecoid"}
-_WRITE = re.compile(r"^(?:save|create|insert|update|delete|remove|submit|approve|audit|cancel|logout|signoff|reset|send|export|execute|commit|modify)", re.IGNORECASE)
+_WRITE = re.compile(r"^(?:add|publish|save|create|insert|update|delete|remove|submit|approve|audit|cancel|logout|signoff|reset|send|export|execute|commit|modify)", re.IGNORECASE)
 _READ = re.compile(r"^(?:get|query|search|list|load|find|fetch|read|select|lookup|count|report|reload|查询|搜索|查找)", re.IGNORECASE)
 _TYPES = {"object", "array", "string", "integer", "number", "boolean", "null"}
 _BINDINGS = {"user_id", "company_id", "u_cid_ajax"}
@@ -41,7 +41,7 @@ def _operation_kind(value):
     value = str(value)
     # Querying GetPayment/GetAuditList/GetUpdateLog is not a payment/audit/update.
     # An explicit combined dispatch such as GetAndSubmit is still a write action.
-    if re.search(r"(?:And|Then)(?:Save|Create|Update|Delete|Submit|Approve|Audit|Send|Pay|Commit)", value, re.IGNORECASE):
+    if re.search(r"(?:And|Then)(?:Add|Publish|Save|Create|Update|Delete|Submit|Approve|Audit|Send|Pay|Commit)", value, re.IGNORECASE):
         return "write"
     if _READ.search(value):
         return "query"
@@ -67,11 +67,11 @@ def _url(value, *, entry=False):
     if not valid or "\\" in value or any(ord(c) < 32 for c in value):
         _fail("仅支持已知聚水潭HTTPS域内的明确地址，不跟随重定向。")
     if entry:
-        if p.query:
-            _fail("本轮页面探索入口暂不支持查询串，请使用明确的无查询串页面入口。")
+        if not passive_page_query(p.query):
+            _fail("页面查询串含身份、凭据或动作调度字段，不能借页面探索执行。")
         if (_AUTH_PATH.search(p.path) or re.search(r"logout|logoff|signout|signoff", p.path, re.IGNORECASE)
                 or any(_operation_kind(part.split(".", 1)[0]) == "write" for part in p.path.split("/") if part)
-                or not (value in _BUILTINS or p.path.lower().endswith((".aspx", ".html", ".htm")))):
+                or not (value.split("?", 1)[0] in _BUILTINS or p.path.lower().endswith((".aspx", ".html", ".htm")))):
             _fail("该地址不是可读取的普通ERP页面入口。")
     elif p.query:
         _fail("接口地址不得夹带查询串，查询字段须保存在固定请求结构中。")
@@ -156,6 +156,17 @@ def _reject_serialized_container(value):
             return
         if isinstance(parsed, (dict, list)):
             _fail("请求含尚未解码的结构化字符串，须先适配固定编码，不能把内部动作或凭据作为业务文本。")
+
+
+def _source_page_allowed(policy, source):
+    page = source.get("page_url")
+    if policy.page_url(page):
+        return True
+    candidate = getattr(policy, "candidate_page_url", None)
+    chain = source.get("page_chain")
+    return (callable(candidate) and candidate(page) and isinstance(chain, list) and 2 <= len(chain) <= 12
+            and chain[0] == page and policy.page_url(chain[-1])
+            and all(policy.page_url(item) or candidate(item) for item in chain))
 
 
 class InterfaceRegistry:
@@ -319,7 +330,8 @@ class InterfaceRegistry:
     def validate_url(self, value, *, entry=False):
         if self.site_policy.platform == "erp":
             return _url(value, entry=entry)
-        if not self.site_policy.business_url(value):
+        network_url = urldefrag(value)[0] if entry and isinstance(value, str) else value
+        if not self.site_policy.business_url(network_url):
             _fail("地址不属于当前平台已核实的业务域及路径，未访问。")
         parts = urlsplit(value)
         if entry and not self.site_policy.page_url(value):
@@ -328,11 +340,25 @@ class InterfaceRegistry:
             _fail("接口地址不得夹带查询串，查询字段须保存在固定请求结构中。")
         return value
 
+    def _source_page(self, source):
+        return _source_page_allowed(self.site_policy, source)
+
     def validate_descriptor(self, value):
-        return self._descriptor(value, url_validator=self.validate_url)
+        return self._descriptor(value, url_validator=self.validate_url, observed_read_validator=self._known_read,
+                                source_validator=self._source_page if self.site_policy.platform == "drp" else None)
+
+    def _known_read(self, descriptor):
+        if self.site_policy.platform != "drp":
+            return False
+        from .drp_read_policy import approved_request
+        if any(str(key).casefold() == "action-name" for key in descriptor.get("headers", {})):
+            return False
+        query = descriptor.get("query", {})
+        url = descriptor["url"] + ("?" + urlencode(query, doseq=True) if query else "")
+        return self.site_policy.business_url(url) and approved_request(descriptor["method"], url, descriptor.get("body"))
 
     @staticmethod
-    def _descriptor(value, *, url_validator=None):
+    def _descriptor(value, *, url_validator=None, observed_read_validator=None, source_validator=None):
         if not isinstance(value, dict):
             _fail("候选请求格式无效。")
         d = copy.deepcopy(value)
@@ -352,10 +378,26 @@ class InterfaceRegistry:
         source = d.get("source", {})
         if not isinstance(source, dict) or source.get("credential_fields"):
             _fail("候选请求有尚不能安全重建的凭据字段，不能保存。")
-        if (source.get("blocked") is not True or not isinstance(d.get("request_id"), str) or not d["request_id"]
+        observed_read = (source.get("blocked") is False and source.get("read_authorized") is True
+                         and callable(observed_read_validator) and observed_read_validator(d))
+        if ((source.get("blocked") is not True and not observed_read) or not isinstance(d.get("request_id"), str) or not d["request_id"]
                 or not isinstance(source.get("discovery_id"), str) or not source["discovery_id"]):
             _fail("缺少实际探索捕获的请求来源，不能形成只读契约。")
-        check_url(source.get("page_url"), entry=True)
+        if source_validator is not None:
+            if not source_validator(source):
+                _fail("请求来源不是本次可信页面链，不能保存自报的新模块来源。")
+        else:
+            check_url(source.get("page_url"), entry=True)
+        if observed_read:
+            chain = source.get("frame_chain")
+            if not isinstance(chain, list) or not 1 <= len(chain) <= 12 or chain[0] != source["page_url"]:
+                _fail("已读取请求缺少实际页面父链，不能保存来源不明的查询。")
+            for index, page in enumerate(chain):
+                if source_validator is not None:
+                    if not source_validator({"page_url": page, "page_chain": chain[index:]}):
+                        _fail("请求页面父链缺少可信固定入口，不能保存。")
+                else:
+                    check_url(page, entry=True)
         bindings = d.get("identity_bindings", [])
         if not isinstance(bindings, list):
             _fail("身份字段映射无效。")
@@ -479,7 +521,7 @@ class InterfaceRegistry:
         descriptor = self.validate_descriptor(record["descriptor"])
         parameters = self._parameters(record["parameters"], descriptor)
         rules = self._rules(record["response_rules"])
-        if self._classify(descriptor, record["read_evidence"]) != "query":
+        if self._classify_for_site(descriptor, record["read_evidence"]) != "query":
             _fail("保存契约缺少明确只读依据，不能根据历史查询标签执行。", "INTERFACE_NOT_READONLY")
         if (_json(descriptor) != _json(record["descriptor"]) or _json(parameters) != _json(record["parameters"])
                 or _json(rules) != _json(record["response_rules"])):
@@ -497,13 +539,24 @@ class InterfaceRegistry:
         if descriptor["request_id"] != request_id or descriptor["source"]["discovery_id"] != discovery_id:
             _fail("实际捕获来源与当前请求编号不一致。", "INTERFACE_INVALID")
         parameters, rules = self._parameters(parameters, descriptor), self._rules(response_rules)
-        kind = self._classify(descriptor, read_evidence)
+        kind = self._classify_for_site(descriptor, read_evidence)
         if self._session(profile) != before:
             _fail("探索期间账号会话已变化。", "INTERFACE_SESSION_CHANGED")
         return self._new(profile, kind, url=descriptor["url"], name=self._text(name, "接口名称"),
                          purpose=self._text(purpose, "接口用途"), descriptor=descriptor, parameters=parameters,
                          response_rules=rules, read_evidence=copy.deepcopy(read_evidence),
                          status="discovered_write" if kind == "write" else "ready_for_validation" if kind == "query" else "needs_evidence")
+
+    def _classify_for_site(self, descriptor, read_evidence):
+        kind = self._classify(descriptor, read_evidence)
+        if self.site_policy.platform != "drp" or kind == "write":
+            return kind
+        from .drp_read_policy import known_read_url
+        if self._known_read(descriptor):
+            return "query"
+        if known_read_url(descriptor["url"]):
+            return "unclassified"  # A dedicated list URL cannot hide a changed dispatch or unsafe body.
+        return kind
 
     @staticmethod
     def _parameter_value(p, value):
@@ -572,6 +625,13 @@ class InterfaceRegistry:
                     if isinstance(value, dict) and "IsSuccess" in value and "ReturnValue" in value:
                         from .erp import _callback
                         value = _callback(raw)
+                if self.site_policy.platform == "drp":
+                    from .drp_read_policy import validate_response
+                    query = descriptor.get("query", {})
+                    target = descriptor["url"] + ("?" + urlencode(query, doseq=True) if query else "")
+                    pagination = validate_response(descriptor["method"], target, descriptor.get("body"), result)
+                    if pagination is not None:
+                        result["pagination"] = pagination
                 for assertion in record["response_rules"]["success"]:
                     actual = _at(value, assertion["path"])
                     if type(actual) is not type(assertion["equals"]) or actual != assertion["equals"]:
@@ -603,9 +663,12 @@ class InterfaceRegistry:
                         _fail("验证期间契约状态已变化，未保存结果。", "INTERFACE_CHANGED")
                     latest.update(status="ready", response_fingerprint=fingerprint, response_shape=shape, validated_at=time.time())
                     self._write(c, latest)
-            return {"ok": True, "interface_id": identifier, "status": "ready", "data": _safe_data(data),
+            answer = {"ok": True, "interface_id": identifier, "status": "ready", "data": _safe_data(data),
                     "complete": None, "has_more": None,
                     "notice": "仅返回本次请求结果，未自动翻页；完整性需按接口分页字段继续核实。"}
+            if isinstance(result.get("pagination"), dict):
+                answer.update(pagination=copy.deepcopy(result["pagination"]), has_more=result["pagination"].get("has_more"))
+            return answer
 
     async def validate(self, profile, interface_id, parameters=None):
         return await self._execute(profile, interface_id, {} if parameters is None else parameters, True)

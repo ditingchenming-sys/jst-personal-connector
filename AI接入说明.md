@@ -1,6 +1,6 @@
 # AI 接入说明
 
-本仓库是公开接入入口。0.6.1 对外只有一个聚水潭连接器，默认ERP；需要分销时自动接续本人已连接的ERP，不要求再次登录分销。使用同一套MCP工具、一个服务地址和当前员工的一份调用授权。远程模式承接平台已核验的钉钉等登录，无须员工另设连接器密码；独立部署保留原密码方式。不要把仓库URL或员工HTTPS服务地址当作远程MCP协议地址。
+本仓库是公开接入入口。0.7.0 对外只有一个聚水潭连接器，默认ERP；需要分销时自动接续本人已连接的ERP，不要求再次登录分销。新增多场景业务链接/iframe、已核分销只读起步与契约持久复用。使用同一套MCP工具、一个服务地址和当前员工的一份调用授权。远程模式承接平台已核验的钉钉等登录，无须员工另设连接器密码；独立部署保留原密码方式。不要把仓库URL或员工HTTPS服务地址当作远程MCP协议地址。
 
 稳定入口：[仓库说明](https://github.com/ditingchenming-sys/jst-personal-connector)、[最新发布](https://github.com/ditingchenming-sys/jst-personal-connector/releases/latest)。接入时读取 `main` 上的当前说明，再选择已发布版本。
 
@@ -30,8 +30,12 @@
 ## 按需求调用
 
 - 先用 `search_capabilities` 查目录与保存接口，区分已适配、待验证和未适配状态。
+- 分销常用只读可直接调用`query_erp(area="drp", capability_id="DRP_SUPPLIER_OPTIONS", parameters={})`取当前账号已关联供应商选项，再用`DRP_SUPPLIER_GOODS`和已选`parameters.supplierCoId`查询该供应商当前页商品价库存；页码`pageNum`默认1、`pageSize`默认20且最大500。这两项无需先建契约，其它场景仍走通用发现与复用，不固定业务范围。
+- `supplierCoId`是查询对象的业务条件，不是操作员工/公司身份，必须取自实际供应商选项。自有商品管理列表不能替代供应商供销商品；HTTP200或空data也不能代替业务成功信封。返回当前页与total/has_more，未知总数保留null，不宣称已自动翻完全量。
 - 明确支持的基础查询用 `query_erp`；检查 `complete/has_more/total` 和错误，不能把未适配或未完成分页当作空结果或全量结果。
 - 未预置功能按 [通用探索与接口复用](docs/通用探索与接口复用.md) 使用 `start_discovery → inspect_discovery → interact_discovery → propose_read_interface → validate_read_interface → call_saved_interface`。条件不清楚时在当前对话里询问本人。
+- 新场景链接由已核根页面的真实HTML/DOM链接或iframe来源逐步收录，常规筛选参数采用通用结构核验。官方新子模块只是候选，不因此成为全局业务API或Authorization目的地；认证票据/身份/写调度参数不能作为业务链接自行注入。遇尚未识别的协议，应返回具体阶段与证据缺口，不能要求业务人员另建连接器或把两个快捷查询当作功能上限。
+- 分销探索不复制真实登录Cookie或页面存储，页面初始化仅使用无认证效力的占位值；实际接口认证由连接器后台使用本人的已核主会话处理。额外认证协议由连接器核对适配，业务人员不传递Cookie或票据。
 - 查询契约通过连接器校验后，在当前已授权连接的读取范围内试查，不要求本人返回登录页逐项批准。服务端身份、Cookie 和令牌由连接器提供，模型不能自报公司、员工或授权。
 - 登录 Cookie 后以本人账号权限为准，预置目录不限制业务范围。写入从实际拦截请求形成 `propose_write_interface` 契约；`preview_write_interface` 读取真实数据并核对同一对象和前置条件；显示完整预览后 `request_operation_confirmation` 交本人确认，确认后 `execute_confirmed_operation` 提交并回查预期字段。已有可信业务系统可沿用签名确认链。查询或页面点击不能替代写入确认。
 - 通用契约按已核对的对象和参数复用；新增参数须重新预览确认。当前通用提交路径是一对象一请求，不把这个边界叫作“已验证整批原子性”；跨对象多步骤须核实聚水潭整体提交保证。预置 W 快捷方式未适配时继续通用探索。

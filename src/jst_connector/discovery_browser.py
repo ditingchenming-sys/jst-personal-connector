@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import hashlib
 import ipaddress
@@ -12,7 +13,7 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qs, quote, urldefrag, urlencode, urljoin, urlsplit, urlunsplit
 from uuid import uuid4
 
 import httpx
@@ -22,8 +23,8 @@ from .adapters import ORDER_URL, PURCHASE_URL
 from .adapters.login import ENTRY_URL
 from .browser import ERP_HOSTS, approved_request, safe_url
 from .errors import ConnectorError
-from .interface_registry import _AUTH_PATH, _operation_kind
-from .platform_policy import get_policy
+from .interface_registry import _AUTH_PATH, _operation_kind, _safe_data, _source_page_allowed
+from .platform_policy import get_policy, passive_page_query
 
 _ASSET_HOSTS = {"src.erp321.com", "cdn.erp321.cn", "cdn-static.erp321.cn"}
 _ASSET_SUFFIX = re.compile(r"\.(js|css|png|jpe?g|gif|svg|ico|woff2?|ttf)$", re.IGNORECASE)
@@ -60,7 +61,8 @@ def _page_url(url):
     if (_AUTH_PATH.search(parts.path) or re.search(r"logout|logoff|signout|signoff", parts.path, re.IGNORECASE)
             or any(_operation_kind(part.split(".", 1)[0]) == "write" for part in parts.path.split("/") if part)):
         return False
-    return (not parts.query and (url in _NAVIGATION or parts.path.lower().endswith((".aspx", ".html", ".htm"))))
+    return (passive_page_query(parts.query) and (urldefrag(url)[0].split("?", 1)[0] in _NAVIGATION
+                                               or parts.path.lower().endswith((".aspx", ".html", ".htm"))))
 
 
 def _asset_url(url):
@@ -154,8 +156,9 @@ def _safe_headers(headers):
     return result
 
 
-async def _public_destination(url, *, policy=None):
-    allowed = (policy.business_url(url) or policy.asset_url(url)) if policy is not None else (_erp_url(url) or _asset_url(url))
+async def _public_destination(url, *, policy=None, page=False):
+    allowed = (policy.business_url(url) or policy.asset_url(url)
+               or page and callable(getattr(policy, "candidate_page_url", None)) and policy.candidate_page_url(url)) if policy is not None else (_erp_url(url) or _asset_url(url))
     if not allowed:
         raise _error(message="目标不属于固定官方HTTPS域名，已阻断。",
                      details={"stage": "dns_policy", "dns_policy": "host_not_allowed"})
@@ -182,7 +185,7 @@ class _References(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
-        target = urljoin(self.base, attrs.get("src" if tag == "iframe" else "href", ""))
+        target = quote(urljoin(self.base, attrs.get("src" if tag == "iframe" else "href", "")), safe=":/?#[]@!$&'()*+,;=%~-._")
         if tag in {"iframe", "a"} and self.page_allowed(target):
             self.pages.add(target)
 
@@ -197,6 +200,7 @@ class _Discovery:
     binding: str
     persisted_binding: str
     pages: set = field(default_factory=set)
+    page_sources: dict = field(default_factory=dict, repr=False)
     refs: dict = field(default_factory=dict, repr=False)
     requests: dict = field(default_factory=dict, repr=False)
     sources: dict = field(default_factory=dict, repr=False)
@@ -230,6 +234,93 @@ class DiscoveryBrowser:
         if self.site_policy.platform == "erp":
             return await _public_destination(url)
         return await _public_destination(url, policy=self.site_policy)
+
+    def _candidate_page(self, url):
+        candidate = getattr(self.site_policy, "candidate_page_url", None)
+        return self._page_url(url) or callable(candidate) and candidate(url)
+
+    def _page_allowed(self, discovery, url):
+        return self._page_url(url) or url in discovery.pages and self._candidate_page(url)
+
+    def _adopt_page(self, discovery, target, chain):
+        if not self._candidate_page(target) or not chain or len(chain) >= 12:
+            return False
+        for url in {target, urldefrag(target)[0]}:
+            discovery.pages.add(url)
+            discovery.page_sources.setdefault(url, [safe_url(target), *chain])
+        return True
+
+    def _exploration_state(self, state, identity=None):
+        if self.site_policy.platform != "drp":
+            return state
+        # Public frontend code rewrites tokens to the parent domain and passes
+        # them through JMX. No real browser credential may enter this context.
+        # The non-authenticating UI placeholder carries verified IDs; every
+        # real business request is authenticated by the separate primary broker.
+        identity = identity or {}
+        payload = {"user": {"coId": identity.get("company_id"), "uid": identity.get("user_id")},
+                   "jst_connector_discovery": True, "aud": "jst-connector-public-page-discovery"}
+        def segment(value):
+            return base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).decode().rstrip("=")
+        placeholder = segment({"alg": "JST_DISCOVERY_ONLY", "typ": "JWT"}) + "." + segment(payload) + ".DISCOVERY_NOT_A_SIGNATURE"
+        return {"cookies": [{"name": "DISTRYBUTION_TOKEN", "value": placeholder, "domain": host, "path": "/",
+                             "expires": -1, "httpOnly": False, "secure": True, "sameSite": "Lax"}
+                            for host in self.site_policy.page_hosts], "origins": []}
+
+    def _frame_chain(self, discovery, frame):
+        chain = []
+        for _ in range(12):
+            if frame is None or not self._page_allowed(discovery, frame.url) or frame.page is not discovery.page:
+                return None
+            chain.append(safe_url(frame.url))
+            if frame is discovery.page.main_frame:
+                if self._page_url(frame.url):
+                    return chain
+                evidence = discovery.page_sources.get(frame.url, [])
+                combined = [*chain, *evidence[1:]]
+                return combined if evidence and len(combined) <= 12 else None
+            frame = frame.parent_frame
+        return None
+
+    async def _observe_iframe(self, discovery, request):
+        """Adopt only a real iframe reference under this discovery's trusted parent chain."""
+        frame = getattr(request, "frame", None)
+        parent = frame.parent_frame if frame is not None else None
+        if not parent or not self._candidate_page(request.url) or not self._frame_chain(discovery, parent):
+            return False
+        element = None
+        try:
+            parent_url = parent.url
+            element = await frame.frame_element()
+            source = await element.get_attribute("src")
+            target = quote(urljoin(parent_url, source or ""), safe=":/?#[]@!$&'()*+,;=%~-._")
+            if (not source or urldefrag(target)[0] != request.url or parent.url != parent_url
+                    or not self._frame_chain(discovery, parent)):
+                return False
+            self._check(discovery)
+            return self._adopt_page(discovery, target, self._frame_chain(discovery, parent))
+        except PlaywrightError:
+            return False
+        finally:
+            if element is not None:
+                await element.dispose()
+
+    def _cors(self, discovery, request):
+        if not self._frame_chain(discovery, request.frame):
+            raise _error(message="请求不是来自本次已观察的可信页面父链，已阻断。")
+        parts = urlsplit(request.frame.url)
+        origin = urlunsplit((parts.scheme, parts.netloc, "", "", ""))
+        if request.headers.get("origin", origin) != origin:
+            raise _error(message="请求来源与本次实际页面不一致，已阻断。")
+        return {"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true", "Vary": "Origin"}
+
+    def _approved_page_read(self, discovery, request, payload):
+        if self.site_policy.platform == "erp":
+            return approved_request(request.method, request.url, payload)
+        from .drp_read_policy import approved_request as drp_read
+        return (self._frame_chain(discovery, request.frame) is not None and self._business_url(request.url)
+                and not any(key.casefold() == "action-name" for key in request.headers)
+                and drp_read(request.method, request.url, payload))
 
     def _check(self, discovery):
         session = self.browser._sessions.get(discovery.profile)
@@ -265,14 +356,14 @@ class DiscoveryBrowser:
                         or (url not in self._navigation and not expected_binding)):
                     raise _error("DISCOVERY_SESSION_CHANGED", "入口审批对应的账号会话已变化，请重新批准。")
                 await self.close_profile(profile)
-                state = await session.context.storage_state()
+                state = self._exploration_state(await session.context.storage_state(), identity)
                 self.browser._assert_scope(profile, session, identity)
                 context = await self.browser._new_context(state)
                 if context is session.context:
                     raise _error(message="探索必须使用独立上下文，不能复用主登录页面。")
                 page = await context.new_page()
                 discovery = _Discovery(uuid4().hex, profile, context, page, dict(identity), session.binding,
-                                       session.vault_binding, pages={url})
+                                       session.vault_binding, pages={url, urldefrag(url)[0]})
                 self._discoveries[discovery.discovery_id] = discovery
                 phase = "route_setup"
                 try:
@@ -303,7 +394,7 @@ class DiscoveryBrowser:
             await self.close_profile(profile)
             raise
 
-    def _capture(self, discovery, request, *, blocked):
+    def _capture(self, discovery, request, *, blocked, read_authorized=False):
         if len(discovery.requests) >= 100:
             return
         parts = urlsplit(request.url)
@@ -344,9 +435,37 @@ class DiscoveryBrowser:
             "identity_bindings": bindings, "json_fields": json_fields}
         discovery.requests[request_id]["_scope"] = {"profile": discovery.profile, "platform": self.site_policy.platform, "identity": dict(discovery.identity),
                                                     "session_binding": discovery.persisted_binding}
+        if self.site_policy.platform == "drp":
+            chain = self._frame_chain(discovery, request.frame)
+            if chain:
+                discovery.requests[request_id]["source"]["page_chain"] = chain
+        if read_authorized:
+            discovery.requests[request_id]["source"].update(read_authorized=True, frame_chain=self._frame_chain(discovery, request.frame))
+        return request_id
 
-    async def _fetch_public(self, url):
-        await self._destination(url)
+    @staticmethod
+    def _observed_response(discovery, request_id, result):
+        if not request_id or request_id not in discovery.requests:
+            return
+        summary = {"status": result.get("status"), "content_type": result.get("content_type", "")}
+        raw = result.get("text")
+        if isinstance(raw, str) and len(raw) <= 2_000_000:
+            try:
+                value = json.loads(raw)
+                summary["schema"] = _schema(_safe_data(value))
+                if isinstance(value, dict) and type(value.get("success")) is bool:
+                    summary["business_success"] = value["success"]
+            except ValueError:
+                summary["schema"] = "unavailable"
+        if isinstance(result.get("pagination"), dict):
+            summary["pagination"] = copy.deepcopy(result["pagination"])
+        discovery.requests[request_id]["observed_response"] = summary
+
+    async def _fetch_public(self, url, *, page=False):
+        if page:
+            await _public_destination(url, policy=self.site_policy, page=True)
+        else:
+            await self._destination(url)
         async with (httpx.AsyncClient(trust_env=False, follow_redirects=False, timeout=15) as client,
                     client.stream("GET", url, headers={"Accept": "*/*"}) as response):
                 if response.status_code != 200 or str(response.url) != url:
@@ -354,22 +473,31 @@ class DiscoveryBrowser:
                 body = bytearray()
                 async for chunk in response.aiter_bytes():
                     body.extend(chunk)
-                    if len(body) > 2000000:
+                    if len(body) > self._asset_limits()[1]:
                         raise _error(message="公开资源超出本次取证范围。")
                 content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
         return {"status": response.status_code, "url": str(response.url), "body": bytes(body), "content_type": content_type}
+
+    def _asset_limits(self):
+        # Official DRP initialization alone exceeds 12 MB, including a 6.4 MB
+        # shared chunk. Keep ERP's existing bounds and DRP's larger bounds finite.
+        return (64, 8 * 1024 * 1024, 32 * 1024 * 1024) if self.site_policy.platform == "drp" else (32, 2000000, 8000000)
 
     async def _asset(self, discovery, url):
         if not self._asset_url(url):
             raise _error(message="该地址不是已核实公共静态资源域及文件。")
         if url in discovery.sources:
             return discovery.sources[url]
-        if len(discovery.sources) >= 32 or discovery.source_bytes >= 8000000:
+        count_limit, file_limit, total_limit = self._asset_limits()
+        if len(discovery.sources) >= count_limit or discovery.source_bytes >= total_limit:
             raise _error(message="公开资源取证已达本次上限，请缩小页面范围。")
         response = await self._anonymous_fetch(url)
+        # Concurrent page chunks may have filled the budget while fetching.
+        if url in discovery.sources:
+            return discovery.sources[url]
         body, content_type = response["body"], response["content_type"]
         if (response.get("status") != 200 or response.get("url") != url or not isinstance(body, bytes)
-                or len(body) > 2000000 or discovery.source_bytes + len(body) > 8000000):
+                or len(discovery.sources) >= count_limit or len(body) > file_limit or discovery.source_bytes + len(body) > total_limit):
             raise _error(message="公开静态响应超出已核实范围。")
         suffix = urlsplit(url).path.lower()
         if ((suffix.endswith(".js") and content_type not in {"application/javascript", "text/javascript"})
@@ -394,47 +522,89 @@ class DiscoveryBrowser:
                 self._check(discovery)
                 await route.fulfill(status=200, body=source["body"], content_type=source["content_type"],
                                     headers={"Access-Control-Allow-Origin": "*"})
-            elif request.method == "GET" and request.resource_type == "document" and request.url in discovery.pages:
+            elif (request.method == "GET" and request.resource_type == "document"
+                  and (request.url in discovery.pages or await self._observe_iframe(discovery, request))):
                 phase = "document_policy"
-                if not self._page_url(request.url):
+                if not self._page_allowed(discovery, request.url):
                     raise _error(message="认证、登出或已知写动作不能作为探索页面。")
-                await self._destination(request.url)
+                frame = getattr(request, "frame", None)
+                if (frame is not None and (frame.page is not discovery.page
+                        or frame.parent_frame is not None and not await self._observe_iframe(discovery, request))):
+                    raise _error(message="页面不属于本次已观察的主页面或iframe父链，已阻断。")
+                if not self._page_url(request.url):
+                    await _public_destination(request.url, policy=self.site_policy, page=True)
+                else:
+                    await self._destination(request.url)
                 self._check(discovery)
                 phase = "document_fetch"
-                response = await route.fetch(max_redirects=0, timeout=30000)
+                if self.site_policy.platform == "drp":
+                    # Public DRP shells are anonymous, including known frontends.
+                    # Never let document Set-Cookie widen the isolated cookie jar.
+                    document = await self._fetch_public(request.url, page=True)
+                    if document["content_type"] != "text/html" or document["status"] != 200:
+                        raise _error(message="新模块入口未返回普通HTML页面，已阻断。")
+                    body = document["body"]
+                else:
+                    response = await route.fetch(max_redirects=0, timeout=30000)
+                    body = await response.body()
                 phase = "document_response"
-                if (response.status != 200 or response.url != request.url
+                if response is not None and (response.status != 200 or response.url != request.url
                         or "text/html" not in response.headers.get("content-type", "").lower()
                         or "attachment" in response.headers.get("content-disposition", "").lower()):
                     raise _error(message="页面响应不符合已批准HTML入口，已阻断。")
-                body = await response.body()
                 if len(body) > 2000000:
                     raise _error(message="探索页面超出本次范围。")
-                parser = _References(request.url, self._page_url)
+                parser = _References(request.url, self._candidate_page)
                 parser.feed(body.decode("utf-8", errors="replace"))
-                discovery.pages.update(parser.pages)
+                chain = discovery.page_sources.get(request.url, [safe_url(request.url)])
+                for target in parser.pages:
+                    self._adopt_page(discovery, target, chain)
                 self._check(discovery)
-                await route.fulfill(response=response)
+                if response is not None:
+                    await route.fulfill(response=response)
+                else:
+                    await route.fulfill(status=200, body=body, content_type="text/html")
             else:
                 phase = "request_capture"
+                if (self.site_policy.platform == "drp" and request.method == "OPTIONS"
+                        and self._business_url(request.url)):
+                    # Local CORS negotiation has no upstream side effect. The
+                    # actual request still needs the complete installed read rule.
+                    headers = self._cors(discovery, request)
+                    headers.update({"Access-Control-Allow-Methods": "GET, POST", "Access-Control-Allow-Headers":
+                                    "authorization, content-type, appcode, source, app-version, x-requested-with, action-name"})
+                    await route.fulfill(status=204, headers=headers, body="")
+                    return
                 payload = None
                 try:
                     payload = request.post_data_json
                 except (PlaywrightError, ValueError):
                     if request.post_data:
                         payload = {key: values[0] for key, values in parse_qs(request.post_data).items()}
-                approved = self.site_policy.platform == "erp" and approved_request(request.method, request.url, payload)
-                self._capture(discovery, request, blocked=not approved)
+                approved = self._approved_page_read(discovery, request, payload)
+                request_id = self._capture(discovery, request, blocked=not approved,
+                                           read_authorized=approved and self.site_policy.platform == "drp")
                 if approved:
+                    if self.site_policy.platform == "drp":
+                        if not request_id or discovery.requests[request_id]["source"].get("credential_fields"):
+                            raise _error(message="已核查询仍含未适配编码或认证字段，未发出请求。")
+                        await self._destination(request.url)
+                        self._check(discovery)
+                        headers = self._cors(discovery, request)
+                    else:
+                        headers = {}
                     result = await self.browser.request(discovery.profile, request.method, request.url, payload)
                     self._check(discovery)
-                    await route.fulfill(status=result["status"], body=result["text"], content_type="application/json")
+                    self._observed_response(discovery, request_id, result)
+                    await route.fulfill(status=result["status"], body=result["text"], content_type="application/json", headers=headers)
                 else:
                     await route.abort("blockedbyclient")
         except (ConnectorError, PlaywrightError, OSError, httpx.HTTPError) as error:
             diagnostic = {"stage": phase,
                           "url": safe_url(request.url) if self._business_url(request.url) or self._asset_url(request.url) else "[未审核地址]",
                           "failure": "policy_rejected" if isinstance(error, ConnectorError) else "transport_failed"}
+            if isinstance(error, ConnectorError):
+                diagnostic["error_code"] = error.code
             if isinstance(error, ConnectorError) and error.details.get("stage") == "dns_policy":
                 diagnostic.update(stage="dns_policy", dns_policy=error.details["dns_policy"])
             if response is not None:
@@ -452,7 +622,7 @@ class DiscoveryBrowser:
         await asyncio.gather(*(handle.dispose() for handle in old_handles), return_exceptions=True)
         frames = []
         for frame in discovery.page.frames[:12]:
-            if not self._page_url(frame.url):
+            if not self._frame_chain(discovery, frame):
                 continue
             elements = []
             locator = frame.locator("a,button,input,select,textarea,[role=button],[role=menuitem],[role=tab],[onclick],iframe,script[src]")
@@ -472,7 +642,7 @@ class DiscoveryBrowser:
                     await element.dispose()
                     continue
                 reference = uuid4().hex[:12]
-                target = urljoin(frame.url, await element.get_attribute("src" if tag == "iframe" else "href") or "") if tag in {"a", "iframe"} else ""
+                target = quote(urljoin(frame.url, await element.get_attribute("src" if tag == "iframe" else "href") or ""), safe=":/?#[]@!$&'()*+,;=%~-._") if tag in {"a", "iframe"} else ""
                 metadata = {"tag": tag, "type": kind, "name": name, "frame_url": frame.url, "target": target}
                 discovery.refs[reference] = (element, frame, metadata, time.monotonic() + 60)
                 item = {"element_ref": reference, "tag": tag, "type": kind, "name": name,
@@ -481,9 +651,8 @@ class DiscoveryBrowser:
                 if tag == "select":
                     item["options"] = [_text(await option.text_content() or "", 100)
                                        for option in (await element.query_selector_all("option"))[:50]]
-                if tag in {"a", "iframe"} and self._page_url(target):
+                if tag in {"a", "iframe"} and self._adopt_page(discovery, target, self._frame_chain(discovery, frame)):
                     item["url"] = target
-                    discovery.pages.add(target)
                 elements.append(item)
             frames.append({"url": safe_url(frame.url), "text": _text(await frame.locator("body").inner_text(timeout=2000)), "elements": elements})
         return {"discovery_id": discovery.discovery_id, "url": safe_url(discovery.page.url), "frames": frames,
@@ -499,7 +668,8 @@ class DiscoveryBrowser:
                 requests = [{"request_id": item["request_id"], "url": safe_url(item["url"]), "method": item["method"],
                              "encoding": item["encoding"], "query_schema": _schema(item["query"]), "body_schema": _schema(item["body"]),
                              "header_names": sorted(item["headers"]),
-                             "source": item["source"], "identity_bindings": item["identity_bindings"]}
+                             "source": item["source"], "identity_bindings": item["identity_bindings"],
+                             **({"observed_response": copy.deepcopy(item["observed_response"])} if "observed_response" in item else {})}
                             for item in discovery.requests.values()]
                 requests = [item for item in requests if search.lower() in json.dumps(item, ensure_ascii=False).lower()]
                 return {"requests": requests[offset:offset + 30], "total": len(requests), "has_more": offset + 30 < len(requests)}
@@ -512,7 +682,7 @@ class DiscoveryBrowser:
                 source = next((item for item in discovery.sources.values() if item["source_id"] == reference), None)
                 if source is None or not urlsplit(source["url"]).path.lower().endswith(".js"):
                     raise _error(message="公开脚本引用无效；不能输入任意URL读取。")
-                text = _text(source["body"].decode("utf-8", errors="replace"), 2000000)
+                text = _text(source["body"].decode("utf-8", errors="replace"), self._asset_limits()[1])
                 if search:
                     offset = text.lower().find(search.lower(), offset)
                     if offset < 0:
@@ -533,8 +703,8 @@ class DiscoveryBrowser:
                 raise _error("DISCOVERY_REF_EXPIRED", "页面结构已变化，请重新读取页面。")
             try:
                 if action == "navigate" or (action == "click" and metadata["tag"] == "a"):
-                    if metadata["tag"] not in {"a", "iframe"} or not self._page_url(metadata["target"]):
-                        raise _error(message="该引用不是已观察到的无参数ERP页面入口。")
+                    if metadata["tag"] not in {"a", "iframe"} or not self._page_allowed(discovery, metadata["target"]):
+                        raise _error(message="该引用不是本次已观察到的安全页面入口。")
                     discovery.pages.add(metadata["target"])
                     await discovery.page.goto(metadata["target"], wait_until="domcontentloaded", timeout=30000)
                 elif action == "fill" and metadata["tag"] in {"input", "textarea"} and metadata["type"] not in {"checkbox", "radio"}:
@@ -560,26 +730,36 @@ class DiscoveryBrowser:
 
     async def execute_read(self, profile, descriptor):
         """只读注册器调用固定契约；不作为任意HTTP工具暴露。"""
-        return await self._execute_contract(profile, descriptor)
+        return await self._execute_contract(profile, descriptor, read_only=True)
 
     async def execute_write(self, profile, descriptor):
         """仅由完成可信确认并占用账本的写入注册器调用。"""
         return await self._execute_contract(profile, descriptor)
 
-    async def _execute_contract(self, profile, descriptor):
+    async def _execute_contract(self, profile, descriptor, *, read_only=False):
         descriptor = copy.deepcopy(descriptor)
         if not isinstance(descriptor, dict):
             raise _error(message="接口描述格式无效。")
         url, method = descriptor.get("url"), descriptor.get("method")
         if not self._business_url(url) or urlsplit(url).query or method not in {"GET", "POST"}:
             raise _error(message="已批准接口的地址或方法无效。")
+        if read_only and self.site_policy.platform == "drp":
+            from .drp_read_policy import approved_request as drp_read
+            from .drp_read_policy import known_read_url
+            query = descriptor.get("query", {})
+            target = url + ("?" + urlencode(query, doseq=True) if query else "")
+            if known_read_url(target) and (any(str(key).casefold() == "action-name" for key in descriptor.get("headers", {}))
+                                          or not drp_read(method, target, descriptor.get("body"))):
+                raise _error("DISCOVERY_NOT_READONLY", "当前商品查询参数或调度已超出已核只读边界，未发出请求。")
         if descriptor.get("source", {}).get("credential_fields"):
             raise _error("DISCOVERY_ENCODING_UNADAPTED", "候选包含未适配认证或隐藏页面状态，需专门适配，不能沿用旧值。")
         headers = descriptor.get("headers", {})
         if not isinstance(headers, dict) or _safe_headers(headers) != headers:
             raise _error(message="接口包含未审核请求头，已阻断。")
         source = descriptor.get("source", {}).get("page_url", "")
-        headers["Referer"] = source if self._page_url(source) else self.site_policy.entry_url
+        source_allowed = self._page_url(source) or (self.site_policy.platform == "drp"
+                                                  and _source_page_allowed(self.site_policy, descriptor.get("source", {})))
+        headers["Referer"] = source if source_allowed else self.site_policy.entry_url
         async with self.browser.verified_scope(profile) as identity:
             session = self.browser._sessions[profile]
             expected = descriptor.get("_scope")
@@ -654,7 +834,13 @@ class DiscoveryBrowser:
                 text = await response.text()
                 if len(text) > 8000000:
                     raise _error(message="接口结果过大，请缩小查询范围。")
-                return {"status": response.status, "text": text, "content_type": response.headers.get("content-type", "")}
+                result = {"status": response.status, "text": text, "content_type": response.headers.get("content-type", "")}
+                if read_only and self.site_policy.platform == "drp":
+                    from .drp_read_policy import validate_response
+                    pagination = validate_response(method, target, descriptor.get("body"), result)
+                    if pagination is not None:
+                        result["pagination"] = pagination
+                return result
             except (PlaywrightError, OSError, UnicodeError):
                 raise _error("DISCOVERY_READ_FAILED", "接口读取失败或超时，未自动重试。") from None
             finally:

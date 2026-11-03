@@ -19,12 +19,14 @@ engine = browser_fixtures.engine
 
 
 @pytest.mark.asyncio
-async def test_unknown_page_query_connected_read_trial_and_reuse_without_discovery_memory(engine, monkeypatch):
+@pytest.mark.parametrize("page_query", ["", "?categoryPath=clothes&brand=NEW&season=2026&filters=%7B%22stock%22%3A%22remaining%22%7D"])
+async def test_unknown_page_query_connected_read_trial_and_reuse_without_discovery_memory(engine, monkeypatch, page_query):
     origin = engine.origin
     original_url = registry_module._url
 
     def local_only(value, *, entry=False):
         if isinstance(value, str) and value.startswith(origin + "/"):
+            original_url("https://www.erp321.com" + value[len(origin):], entry=entry)
             return value
         return original_url(value, entry=entry)
 
@@ -34,7 +36,7 @@ async def test_unknown_page_query_connected_read_trial_and_reuse_without_discove
         parts = urlsplit(value)
         return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
     monkeypatch.setattr(discovery_module, "safe_url", local_safe_url)
-    entry_url = origin + "/entry.html"
+    entry_url = origin + "/entry.html" + page_query
     monkeypatch.setattr(registry_module, "_BUILTINS", {entry_url})
     service = ConnectorService(engine.root, vault=engine.vault, browser=engine.browser)
     service._discovery = engine.discovery
@@ -42,6 +44,10 @@ async def test_unknown_page_query_connected_read_trial_and_reuse_without_discove
     token = engine.vault.ensure_client("codex")
     client_headers = {"Authorization": "Bearer " + token}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(service)), base_url="http://testserver") as client:
+        for query in ("action=delete", "__VIEWSTATE=hidden", "uid=999", "__CALLBACKPARAM=save"):
+            rejected = await client.post("/api/discovery-start", headers=client_headers, json={"url": origin + "/entry.html?" + query})
+            assert rejected.status_code == 409
+        assert not engine.received
         start = await client.post("/api/discovery-start", headers=client_headers, json={"url": entry_url})
         assert start.status_code == 200
         snapshot = start.json()["discovery"]
@@ -65,7 +71,7 @@ async def test_unknown_page_query_connected_read_trial_and_reuse_without_discove
         assert not any(item["method"] == "POST" for item in engine.received)
         draft_request = {"discovery_id": discovery_id, "request_id": query_request["request_id"],
                          "name": "Local query", "purpose": "Read fixture SKU records",
-                         "read_evidence": {"source_url": entry_url, "description": "Page query button issues the list request"},
+                         "read_evidence": {"source_url": query_request["source"]["page_url"], "description": "Page query button issues the list request"},
                          "parameters": [{"name": "sku", "path": "/body/sku", "type": "string", "required": True}],
                          "response_rules": {"success": [], "required": [{"path": "/records", "type": "array"}], "data_path": "/records"}}
         proposed = await client.post("/api/interface-propose", headers=client_headers, json=draft_request)
